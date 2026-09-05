@@ -9,7 +9,9 @@ Características:
 - Validación con reporte agregado: todos los problemas de una vez, cada uno
   con ruta de campo (``field_path``) y mensaje legible.
 - Campos desconocidos son error, con sugerencia del campo más cercano.
-- Rutas relativas se resuelven contra el directorio del archivo JSON.
+- Normalización completa de rutas locales (``odin.paths``, Item 003):
+  separadores ``/`` y ``\\``, expansión de ``~`` y resolución de rutas
+  relativas contra el directorio del archivo JSON.
 """
 
 from __future__ import annotations
@@ -20,9 +22,11 @@ import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 from typing import Any, TypeVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from odin.paths import normalize_path
 
 __all__ = [
     "AuthMethod",
@@ -466,16 +470,6 @@ class _Validator:
                 self.add(field_path, message)
 
 
-def _is_absolute(value: str) -> bool:
-    return Path(value).is_absolute() or PureWindowsPath(value).is_absolute()
-
-
-def _resolve_path(value: str, base_dir: Path) -> Path:
-    if value.startswith("~") or _is_absolute(value):
-        return Path(value)
-    return base_dir / value
-
-
 def _email_field(v: _Validator, raw: dict[str, Any], key: str, path: str) -> str:
     field_path = f"{path}.{key}"
     if key not in raw:
@@ -516,7 +510,9 @@ def _parse_database(
     role = v.str_field(raw, "role", path, required=False, nullable=True)
     charset = v.str_field(raw, "charset", path, required=False, nullable=True)
     gbak_path_raw = v.str_field(raw, "gbak_path", path, required=False, nullable=True)
-    gbak_path = None if gbak_path_raw is None else str(_resolve_path(gbak_path_raw, base_dir))
+    gbak_path = (
+        None if gbak_path_raw is None else str(normalize_path(gbak_path_raw, base_dir=base_dir))
+    )
     gbak_timeout_sec = v.int_field(
         raw, "gbak_timeout_sec", path, required=False, nullable=True, exclusive_minimum=0
     )
@@ -542,7 +538,9 @@ def _parse_auth(v: _Validator, raw: dict[str, Any], path: str, base_dir: Path) -
     )
     password = v.str_field(raw, "password", path, required=False, nullable=True)
     private_key_raw = v.str_field(raw, "private_key", path, required=False, nullable=True)
-    private_key = None if private_key_raw is None else str(_resolve_path(private_key_raw, base_dir))
+    private_key = (
+        None if private_key_raw is None else str(normalize_path(private_key_raw, base_dir=base_dir))
+    )
     passphrase = v.str_field(raw, "passphrase", path, required=False, nullable=True)
     return ServerAuth(
         method=method, password=password, private_key=private_key, passphrase=passphrase
@@ -644,13 +642,15 @@ _LOCAL_FIELDS = frozenset(
 def _parse_local(v: _Validator, raw: dict[str, Any], path: str, base_dir: Path) -> LocalConfig:
     v.unknown_fields(raw, _LOCAL_FIELDS, path)
     work_dir_raw = v.str_field(raw, "work_dir", path)
-    work_dir = _resolve_path(work_dir_raw, base_dir) if work_dir_raw is not None else base_dir
+    work_dir = (
+        normalize_path(work_dir_raw, base_dir=base_dir) if work_dir_raw is not None else base_dir
+    )
     retention_days = v.int_field(raw, "retention_days", path, minimum=0)
     if retention_days is None:
         retention_days = 0
     log_level = v.enum_field(raw, "log_level", path, LogLevel, default=LogLevel.INFO)
     log_dir_raw = v.str_field(raw, "log_dir", path, required=False, nullable=True)
-    log_dir = None if log_dir_raw is None else _resolve_path(log_dir_raw, base_dir)
+    log_dir = None if log_dir_raw is None else normalize_path(log_dir_raw, base_dir=base_dir)
     min_free_mb = v.int_field(raw, "min_free_mb", path, required=False, default=1024, minimum=0)
     if min_free_mb is None:
         min_free_mb = 0
@@ -774,7 +774,7 @@ def load_config(path: Path | str) -> Config:
     if root_map is None:
         raise ConfigError(v.problems)
 
-    base_dir = config_path.parent
+    base_dir = config_path.parent.absolute()
     v.unknown_fields(root_map, _TOP_FIELDS, _ROOT)
 
     databases: list[DatabaseConfig] = []

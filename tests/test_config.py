@@ -345,6 +345,48 @@ def test_relative_paths_resolved_against_config_dir(tmp_path: Path) -> None:
     assert config.databases[0].gbak_path == str(subdir / "bin" / "gbak")
 
 
+def test_windows_style_work_dir_not_prefixed(tmp_path: Path) -> None:
+    def windows(d: dict[str, Any]) -> None:
+        d["local"]["work_dir"] = "D:\\Backups\\odin"
+
+    config = _load(tmp_path, _mutate(windows))
+    assert config.local.work_dir.as_posix() == "D:/Backups/odin"
+
+
+def test_private_key_tilde_with_backslashes(tmp_path: Path) -> None:
+    def key_auth(d: dict[str, Any]) -> None:
+        d["servers"][0]["auth"] = {
+            "method": "key",
+            "private_key": "~\\.ssh\\id_ed25519",
+        }
+
+    config = _load(tmp_path, _mutate(key_auth))
+    expected = (Path.home() / ".ssh" / "id_ed25519").as_posix()
+    assert config.servers[0].auth.private_key is not None
+    assert Path(config.servers[0].auth.private_key).as_posix() == expected
+
+
+def test_gbak_path_relative_with_backslashes(tmp_path: Path) -> None:
+    def gbak(d: dict[str, Any]) -> None:
+        d["databases"][0]["gbak_path"] = "bin\\gbak.exe"
+
+    config = _load(tmp_path, _mutate(gbak))
+    assert config.databases[0].gbak_path is not None
+    assert Path(config.databases[0].gbak_path).as_posix() == (tmp_path / "bin/gbak.exe").as_posix()
+
+
+def test_relative_config_file_anchors_to_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    def relative(d: dict[str, Any]) -> None:
+        d["local"]["work_dir"] = "./work"
+
+    config = load_config(_write(tmp_path, _mutate(relative)).name)
+    assert config.local.work_dir == tmp_path / "work"
+
+
 def test_aggregation_of_multiple_errors(tmp_path: Path) -> None:
     def many(d: dict[str, Any]) -> None:
         d["compression"]["level"] = 99
