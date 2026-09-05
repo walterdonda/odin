@@ -97,13 +97,14 @@ Extensión completa del esquema (nuevos campos opcionales sobre el contrato de l
 - No requiere variables de entorno, secretos ni puertos.
 
 ### Checklist de Validación Manual
-- [ ] **Tests pasan:** `uv run pytest -q` verde (nuevos tests de config + smoke previo).
-- [ ] **Lint/tipos:** `uv run ruff check . && uv run ruff format --check . && uv run mypy` sin errores.
-- [ ] **Funcionalidad verificada:**
-  - `uv run python -c "from odin.config import load_config; print(load_config('<fixture válida>'))"` → objeto `Config` con defaults.
-  - Fixture con errores → excepción con todos los problemas listados, uno por línea, con `field_path`.
-  - JSON con `"pasword"` → error sugiere `password`.
-- [ ] **Datos verificados:** fixture mínima aplica los defaults documentados (log_level INFO, gbak_timeout_sec 7200, min_free_mb 1024, sftp_retries 3, host_key_policy strict, log_tail_lines 50).
+- [x] **Tests pasan:** `uv run pytest -q` verde (36 tests: 32 de config + 4 smoke).
+- [x] **Lint/tipos:** `uv run ruff check . && uv run ruff format --check . && uv run mypy` sin errores.
+- [x] **Funcionalidad verificada:**
+  - `load_config()` sobre ambas fixtures válidas → objeto `Config` con defaults.
+  - JSON con 3 errores estructurales → excepción con los 3 problemas listados, uno por línea, con `field_path`.
+  - JSON con `"pasword"` → error sugiere `password` ("¿quiso decir 'password'?").
+  - Errores semánticos agregados (duplicado + referencia inexistente + auth incoherente) reportados juntos.
+- [x] **Datos verificados:** fixture mínima aplica los defaults documentados (log_level INFO, gbak_timeout_sec 7200, min_free_mb 1024, sftp_retries 3, sftp_connect_timeout_sec 30, host_key_policy strict, log_tail_lines 50, resolved_log_dir `<work_dir>/logs`).
 
 ### Resultados Esperados
 - Archivos nuevos: `src/odin/config.py`, `tests/test_config.py`, `tests/fixtures/config_valid_linux.json`, `tests/fixtures/config_valid_windows.json`, `tests/fixtures/` con JSONs inválidos por categoría.
@@ -114,13 +115,13 @@ Extensión completa del esquema (nuevos campos opcionales sobre el contrato de l
 
 ```markdown
 ## Validation Results
-- [ ] pytest verde (tests de config + smoke)
-- [ ] ruff check / format / mypy sin errores
-- [ ] Fixture válida parsea con defaults correctos (Linux y Windows)
-- [ ] Errores agregados: N problemas reportados simultáneamente
-- [ ] Campo desconocido rechazado con sugerencia
-- [ ] iter_secret_fields cubre todos los campos sensibles
-- [ ] Servicios externos: N/A
+- [x] pytest verde (36 tests: 32 de config + 4 smoke)
+- [x] ruff check / format / mypy sin errores
+- [x] Fixture válida parsea con defaults correctos (Linux y Windows)
+- [x] Errores agregados: 3 problemas estructurales y 3 semánticos reportados simultáneamente
+- [x] Campo desconocido rechazado con sugerencia (`pasword` → `password`)
+- [x] iter_secret_fields cubre todos los campos sensibles (password de base, password/passphrase/private_key de auth, password de compresión y de SMTP)
+- [x] Servicios externos: N/A
 ```
 
 ## Adaptaciones de Plantilla (documentadas)
@@ -134,9 +135,44 @@ La detección en runtime se especificará en el item correspondiente al respaldo
 
 ## Decisions & Trade-offs
 
-> To be updated during implementation.
+> Actualizado durante la implementación (2026-09-05).
 
-(Candidatos a registrar: charset `null` = no pasar flag a gbak; rechazo de campos desconocidos como error en vez de warning; dataclasses frozen vs. mutables; uso de `difflib` para sugerencias; validación de `schedule` solo de forma — 5 campos — dejando la semántica cron a la Etapa 6.)
+1. **Incidente de fuentes perdidos y re-implementación:** la sesión previa había implementado
+   `src/odin/__init__.py`, `src/odin/cli.py` y `src/odin/config.py` (quedaron `.pyc` en
+   `src/odin/__pycache__/`, compilados 14:38–15:18), pero los fuentes nunca se commitearon y
+   desaparecieron antes del commit `a56b365`. Se re-implementaron los tres módulos contra el
+   contrato fijado por los tests ya commiteados (36 tests verdes). **Lección:** commitear los
+   fuentes apenas pasan los gates. `__init__.py` y `cli.py` (entregables del Item 001) quedaron
+   restaurados como prerrequisito.
+2. **`charset: null` = no pasar flag a gbak** (según spec): el modelo preserva `None` y la
+   Etapa 2 decide omitir el flag.
+3. **Campos desconocidos son error** (no warning), con sugerencia vía `difflib.get_close_matches`
+   (cutoff 0.6): detecta typos como `pasword` → `password`.
+4. **Dataclasses `frozen=True, kw_only=True, slots=True`:** la configuración es inmutable para el
+   pipeline; slots reduce memoria y evita atributos accidentales.
+5. **Validación en dos fases:** primero estructural sobre dicts crudos (tipos, rangos, enums,
+   requeridos, campos desconocidos, emails, timezone, forma del `schedule`), y solo si es válida,
+   `Config.validate_semantics()` sobre el modelo construido (unicidad de nombres, referencias de
+   jobs, coherencia `auth.method` ↔ credenciales). Así el parseo nunca falla en cascada y
+   `validate_semantics()` queda reutilizable por `odin validate` (Item 006). Trade-off: un JSON con
+   errores estructurales no reporta además los semánticos (se reportan en la siguiente pasada).
+6. **Resolución de rutas:** relativas contra el directorio del JSON (`work_dir`, `log_dir`,
+   `gbak_path`, `private_key`); valores que empiezan con `~` y rutas absolutas (POSIX o Windows
+   con letra de unidad/UNC, vía `PureWindowsPath`) se conservan como están; la normalización
+   completa (`/` vs `\`, expansión de `~`) llega en el Item 003.
+7. **`smtp.username`/`smtp.password` requeridos** (contrato de la visión, sin markers de
+   opcionales en el spec). SMTP anónimo se evaluará en la Etapa 5 si surge la necesidad.
+8. **Sección `servers` requerida, lista puede ser vacía:** permite configuraciones locales sin
+   transferencia SFTP sin romper el contrato.
+9. **`schedule` validado solo en forma** (5 campos); la semántica cron corresponde a la Etapa 6.
+10. **`timezone` validado con `zoneinfo`** (tzdata del sistema; verificado
+    `America/Argentina/Buenos_Aires` y `UTC` en el entorno de desarrollo).
+11. **`pyproject.toml`:** se agregó `session-inicial-spec-respaldo-vikingo.md` al
+    `extend-exclude` de ruff: es un registro histórico de sesión con bloques de código embebidos,
+    no código fuente; sin la exclusión `ruff format --check .` no puede pasar.
+12. **Fallbacks internos de construcción:** ante campo inválido, los parsers acumulan el problema
+    y continúan con un valor neutro; como hay `raise ConfigError` antes de devolver el `Config`,
+    esos valores nunca son observables. Mantiene tipado estricto sin `Optional` en cascada.
 
 ## Recordatorio de Completado
 
@@ -144,4 +180,7 @@ La detección en runtime se especificará en el item correspondiente al respaldo
 
 ## Próximo Paso
 
-Iniciar una **nueva sesión de chat** y ejecutar `/speckit.aide.execute-item` con el número **002** para implementar este item.
+Item 002 completado (2026-09-05). Iniciar una **nueva sesión de chat** y ejecutar
+`/speckit.aide.create-item` con el número **003** (normalización OS-agnóstica de rutas),
+luego `/speckit.aide.execute-item` para implementarlo. **Pendiente antes de cerrar la
+Etapa 1:** commitear los fuentes de `src/odin/` (ver decisión 1).

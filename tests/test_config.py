@@ -102,6 +102,7 @@ def test_load_valid_linux_fixture() -> None:
     assert config.databases[0].charset == "ISO8859_1"
     assert config.servers[1].auth.method is AuthMethod.KEY
     assert config.scheduler.enabled is True
+    assert config.scheduler.jobs[0].on_misfire is MisfirePolicy.RUN_ONCE
 
 
 def test_load_valid_windows_fixture() -> None:
@@ -278,9 +279,7 @@ def test_job_references_existing_database(tmp_path: Path) -> None:
         d["scheduler"]["jobs"][0]["databases"] = ["inexistente"]
 
     problems = _problems(tmp_path, _mutate(bad))
-    assert any(
-        p.field_path == "config.scheduler.jobs[0].databases[0]" for p in problems
-    )
+    assert any(p.field_path == "config.scheduler.jobs[0].databases[0]" for p in problems)
 
 
 def test_schedule_must_have_five_fields(tmp_path: Path) -> None:
@@ -354,7 +353,8 @@ def test_aggregation_of_multiple_errors(tmp_path: Path) -> None:
 
     problems = _problems(tmp_path, _mutate(many))
     paths = {p.field_path for p in problems}
-    assert {"config.compression.level", "config.servers[0].port", "config.local.retention_days"} <= paths
+    expected = {"config.compression.level", "config.servers[0].port", "config.local.retention_days"}
+    assert expected <= paths
     assert len(problems) >= 3
 
 

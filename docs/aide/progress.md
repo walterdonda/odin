@@ -4,7 +4,7 @@
 
 **Leyenda:** 📋 Planificado · 🚧 En progreso · ✅ Completo · ⏸️ Diferido · ❌ Excluido
 
-**Última actualización:** 2026-09-05 (Item 002 en ejecución)
+**Última actualización:** 2026-09-05 (Item 002 completado ✅)
 
 ---
 
@@ -30,7 +30,7 @@ Estado: 🚧
 ### Entregables
 - 🚧 Estructura de paquete `src/odin/` (`cli.py`, `config.py`, `log.py`, `paths.py`), `tests/`, README inicial — esqueleto, tests de humo y README inicial listos (Item 001 ✅); faltan `config.py`, `log.py`, `paths.py` (Items 002–004)
 - ✅ `pyproject.toml`: descripción, dependencias (`paramiko`, `py7zr`, `apscheduler`, `pywin32; sys_platform == "win32"`), `[project.scripts] odin`, config de pytest (Item 001)
-- 🚧 Modelo de configuración (dataclasses): `databases`, `compression`, `servers`, `notification`, `local`, `scheduler` con errores de parseo claros
+- ✅ Modelo de configuración (dataclasses): `databases`, `compression`, `servers`, `notification`, `local`, `scheduler` con errores de parseo claros (Item 002 ✅: `src/odin/config.py` con validación agregada estructural + semántica, sugerencias de typo, defaults y campos de confiabilidad/observabilidad; fuentes del Item 001 restaurados tras pérdida sin commit)
 - 📋 Normalización OS-agnóstica de rutas (`pathlib`, `/` y `\`, expansión de `~`, rutas relativas al JSON)
 - 📋 Logging base: consola + archivo con rotación, nivel configurable, enmascarado de secretos
 - 📋 CLI argparse: `odin validate --config <ruta>` + variable de entorno `ODIN_CONFIG`; exit codes (0/2/1)
