@@ -1,0 +1,71 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "odin"
+version = "0.1.0"
+description = "Respaldo externo de bases de datos Firebird (2.5-6): backup con gbak, compresion 7z, transferencia SFTP con paramiko y notificacion por correo."
+readme = "README.md"
+requires-python = ">=3.14"
+license = "MIT"
+keywords = ["firebird", "backup", "gbak", "sftp", "paramiko", "7z"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: System :: Archiving :: Backup",
+]
+dependencies = [
+    "paramiko>=3.5",
+    "py7zr>=1.0",
+    "apscheduler>=3.11",
+    "pywin32>=310; sys_platform == 'win32'",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=7",
+    "ruff>=0.14",
+    "mypy>=1.18",
+]
+
+[project.scripts]
+odin = "odin.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/odin"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+
+[tool.coverage.run]
+source = ["src/odin"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+src = ["src", "tests"]
+extend-exclude = [".specify", ".opencode"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["odin"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+mypy_path = "src"
+packages = ["odin"]
+
+[[tool.mypy.overrides]]
+module = ["paramiko.*", "py7zr.*", "apscheduler.*"]
+ignore_missing_imports = true
