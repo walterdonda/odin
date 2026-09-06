@@ -56,9 +56,9 @@ Este item no toca la CLI (Items 005–007): `setup_logging` se invoca con la con
 - Entorno del Item 001 operativo (`uv sync`). Sin variables de entorno ni secretos reales; los secretos de prueba salen de los fixtures JSON existentes.
 
 ### Checklist de Validación Manual
-- [ ] **Tests pasan:** `uv run pytest -q` verde (suite existente intacta + tests nuevos de `test_log.py`).
-- [ ] **Lint/tipos:** `uv run ruff check . && uv run ruff format --check . && uv run mypy` sin errores.
-- [ ] **Funcionalidad verificada:** ejecutar manualmente (vía `uv run python -c ...`) `setup_logging` con un `Config` de fixture: se crea `<resolved_log_dir>/odin.log`, un mensaje INFO queda escrito con timestamp, y un mensaje que contiene el password del fixture queda enmascarado (`***`) tanto en consola como en el archivo.
+- [x] **Tests pasan:** `uv run pytest -q` verde (suite existente intacta + tests nuevos de `test_log.py`). 102 passed (2026-09-06).
+- [x] **Lint/tipos:** `uv run ruff check . && uv run ruff format --check . && uv run mypy` sin errores (2026-09-06).
+- [x] **Funcionalidad verificada:** ejecutar manualmente (vía `uv run python -c ...`) `setup_logging` con un `Config` de fixture: se crea `<resolved_log_dir>/odin.log`, un mensaje INFO queda escrito con timestamp, y un mensaje que contiene el password del fixture queda enmascarado (`***`) tanto en consola como en el archivo. Verificado el 2026-09-06 con `config_valid_linux.json`: `masterkey` → `***` en ambos destinos (2026-09-06).
 
 ### Resultados Esperados
 - Archivos nuevos: `src/odin/log.py`, `tests/test_log.py`.
@@ -68,7 +68,13 @@ Este item no toca la CLI (Items 005–007): `setup_logging` se invoca con la con
 
 ## Decisions & Trade-offs
 
-> To be updated during implementation.
+1. **Política de secretos cortos (`MIN_SECRET_LENGTH = 4`):** los literales de 1–3 caracteres de `iter_secret_fields()` se ignoran. Enmascarar literales tan cortos (p. ej. `a` o `7`) destruiría la legibilidad del log por falsos positivos sin beneficio real: una credencial así de corta es débil y debe corregirse en la configuración, no ocultarse en el log. Trade-off: un secreto real de 3 caracteres quedaría expuesto; se considera aceptable y la política está documentada en el docstring del módulo.
+2. **Enmascarado literal con `str.replace`, no regex:** los secretos son valores arbitrarios del JSON; usar `re.escape`/regex agregaría complejidad y riesgo sin ganancia. El orden de más largo a más corto evita solapamientos parciales (`abcdef` antes que `abc`).
+3. **PEM en un solo pase con alternativa `(-----END \2-----|\Z)`:** una primera implementación usaba dos regex separadas (bloque completo y luego bloque abierto); la segunda pasada reencontraba el marcador `BEGIN` de bloques ya enmascarados y devoraba también el `-----END-----`, rompiendo 2 tests heredados del commit previo. La regex única con backreference `\2` (el `END` debe coincidir con la etiqueta del `BEGIN`: `OPENSSH`, `ENCRYPTED`, `RSA`, …) preserva los marcadores y vacía solo el cuerpo; un bloque truncado sin `END` se enmascara hasta el fin del texto (postura conservadora: tras un `BEGIN` no hay forma de saber dónde termina el material de la clave).
+4. **`MaskingFilter` por handler sobre el mensaje interpolado:** el filtro se aplica a `record.getMessage()` (con args `%` ya interpolados) y luego `record.args = None`, cubriendo tanto mensajes literales como formateados en ambos destinos. Alternativa descartada: enmascarar solo `record.msg` (dejaría secretos pasados como args).
+5. **Idempotencia de `setup_logging`:** re-invocarla cierra y remueve los handlers previos del logger `odin` antes de crear los nuevos, y fija `propagate = False` para evitar líneas duplicadas si otro componente configura el root logger. Necesario para la recarga en caliente del modo servicio (Etapa 6).
+6. **Defaults de rotación como constantes, no configurables en el JSON:** 5 MiB por archivo × 5 backups (`DEFAULT_MAX_BYTES`, `DEFAULT_BACKUP_COUNT`). Mantienen acotado el disco (~30 MiB máx.) sin sumar superficie de configuración en la Etapa 1; si la operación lo pide, exponerlos en `local` es un cambio retrocompatible.
+7. **Correcciones sobre lo ya commiteado:** la sesión anterior había commiteado `log.py`/`test_log.py` con los 2 tests PEM fallando y 3 hallazgos de ruff (orden de imports, 2 líneas > 100). Se corrigió la regex PEM (decisión 3), se reordenaron imports y se aplicó `ruff format`. Sin cambios de API ni de comportamiento especificado.
 
 ## Recordatorio de Completado
 

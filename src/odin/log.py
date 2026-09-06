@@ -57,11 +57,10 @@ DEFAULT_BACKUP_COUNT = 5
 MASK = "***"
 MIN_SECRET_LENGTH = 4
 
-_PEM_PAIR_RE = re.compile(
-    r"(-----BEGIN ([A-Z0-9 ]*PRIVATE KEY)-----).*?(-----END \2-----)",
+_PEM_RE = re.compile(
+    r"(-----BEGIN ([A-Z0-9 ]*PRIVATE KEY)-----).*?(-----END \2-----|\Z)",
     re.DOTALL,
 )
-_PEM_OPEN_RE = re.compile(r"(-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----).*\Z", re.DOTALL)
 
 _LEVELS: Mapping[LogLevel, int] = {
     LogLevel.DEBUG: logging.DEBUG,
@@ -112,8 +111,7 @@ class SecretMasker:
         masked = text
         for secret in self._secrets:
             masked = masked.replace(secret, MASK)
-        masked = _PEM_PAIR_RE.sub(rf"\1{MASK}\3", masked)
-        return _PEM_OPEN_RE.sub(rf"\1{MASK}", masked)
+        return _PEM_RE.sub(rf"\1{MASK}\3", masked)
 
 
 class MaskingFilter(logging.Filter):

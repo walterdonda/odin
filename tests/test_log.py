@@ -17,8 +17,8 @@ from odin.log import (
     DEFAULT_BACKUP_COUNT,
     DEFAULT_MAX_BYTES,
     LOG_FILENAME,
-    LOGGER_NAME,
     LOG_FORMAT,
+    LOGGER_NAME,
     MIN_SECRET_LENGTH,
     MaskingFilter,
     SecretMasker,
@@ -127,8 +127,14 @@ def test_mask_pem_block_body_removed() -> None:
 
 def test_mask_pem_variants_openssh_and_encrypted() -> None:
     masker = SecretMasker([])
-    openssh = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjE=\n-----END OPENSSH PRIVATE KEY-----"
-    encrypted = "-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIFHDBOBgkq\n-----END ENCRYPTED PRIVATE KEY-----"
+    openssh = (
+        "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+        "b3BlbnNzaC1rZXktdjE=\n"
+        "-----END OPENSSH PRIVATE KEY-----"
+    )
+    encrypted = (
+        "-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIFHDBOBgkq\n-----END ENCRYPTED PRIVATE KEY-----"
+    )
     masked = masker.mask(f"{openssh}\n{encrypted}")
     assert "b3BlbnNzaC1rZXktdjE=" not in masked
     assert "MIIFHDBOBgkq" not in masked
@@ -170,9 +176,7 @@ def test_masker_from_config_masks_fixture_secret() -> None:
 # --- setup_logging ---
 
 
-def test_setup_logging_returns_named_logger(
-    tmp_path: Path, odin_logger: logging.Logger
-) -> None:
+def test_setup_logging_returns_named_logger(tmp_path: Path, odin_logger: logging.Logger) -> None:
     config = _load_fixture_config(tmp_path)
     logger = setup_logging(config)
     assert logger is odin_logger
@@ -283,9 +287,7 @@ def test_setup_logging_masks_interpolated_args_in_both_destinations(
         assert "conectando a erp_principal con clave ***" in output
 
 
-def test_setup_logging_masks_pem_block_in_file(
-    tmp_path: Path, odin_logger: logging.Logger
-) -> None:
+def test_setup_logging_masks_pem_block_in_file(tmp_path: Path, odin_logger: logging.Logger) -> None:
     config = _load_fixture_config(tmp_path)
     logger = setup_logging(config)
     pem = "-----BEGIN OPENSSH PRIVATE KEY-----\nSECRETO-DE-CLAVE\n-----END OPENSSH PRIVATE KEY-----"

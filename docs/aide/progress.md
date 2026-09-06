@@ -4,7 +4,7 @@
 
 **Leyenda:** 📋 Planificado · 🚧 En progreso · ✅ Completo · ⏸️ Diferido · ❌ Excluido
 
-**Última actualización:** 2026-09-05 (Item 004 en progreso 🚧)
+**Última actualización:** 2026-09-06 (Item 004 completo ✅)
 
 ---
 
@@ -32,7 +32,7 @@ Estado: 🚧
 - ✅ `pyproject.toml`: descripción, dependencias (`paramiko`, `py7zr`, `apscheduler`, `pywin32; sys_platform == "win32"`), `[project.scripts] odin`, config de pytest (Item 001)
 - ✅ Modelo de configuración (dataclasses): `databases`, `compression`, `servers`, `notification`, `local`, `scheduler` con errores de parseo claros (Item 002 ✅: `src/odin/config.py` con validación agregada estructural + semántica, sugerencias de typo, defaults y campos de confiabilidad/observabilidad; fuentes del Item 001 restaurados tras pérdida sin commit)
 - ✅ Normalización OS-agnóstica de rutas (`pathlib`, `/` y `\`, expansión de `~`, rutas relativas al JSON) (Item 003 ✅: `src/odin/paths.py` con absolutitud por sabor, `expand_user` propio y forma canónica `as_posix()`; integrado en `config.py` para `work_dir`, `log_dir`, `gbak_path`, `private_key`; 37 tests nuevos)
-- 🚧 Logging base: consola + archivo con rotación, nivel configurable, enmascarado de secretos
+- ✅ Logging base: consola + archivo con rotación, nivel configurable, enmascarado de secretos (Item 004 ✅: `src/odin/log.py` con `setup_logging` idempotente — consola + `RotatingFileHandler` 5 MiB × 5 backups, nivel vía `LogLevel` — y `SecretMasker`/`MaskingFilter` puros reutilizables: secretos de `iter_secret_fields()` → `***` en ambos destinos, bloques PEM `PRIVATE KEY` vaciados por patrón; 30 tests en `tests/test_log.py`)
 - 📋 CLI argparse: `odin validate --config <ruta>` + variable de entorno `ODIN_CONFIG`; exit codes (0/2/1)
 - 📋 Ejemplos `examples/config.linux.json` y `examples/config.windows.json`
 - 📋 `uv sync` + `uv run pytest` funcionando en Linux y Windows
