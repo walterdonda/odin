@@ -22,6 +22,21 @@ uv run odin --version
 La documentación completa de instalación y operación llegará con el
 Item 009 del roadmap.
 
+## Ejemplos de configuración
+
+El directorio [`examples/`](examples/) trae configuraciones de ejemplo listas
+para copiar, una por plataforma:
+
+- [`examples/config.linux.json`](examples/config.linux.json) — Linux LTS.
+- [`examples/config.windows.json`](examples/config.windows.json) — Windows
+  Server.
+
+Ambos reproducen el mismo esquema OS-agnóstico (solo cambian las rutas) con
+secretos como placeholder `***`. [`examples/README.md`](examples/README.md)
+explica cómo adaptarlos, las recomendaciones de seguridad (permisos `600`/ACL,
+no versionar el JSON real) y los campos opcionales con sus valores por
+defecto. Validá tu configuración con `odin validate` antes de ejecutar.
+
 ## Validación de configuración
 
 ```bash
