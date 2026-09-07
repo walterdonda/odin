@@ -170,6 +170,8 @@ La detección en runtime se especificará en el item correspondiente al respaldo
 11. **`pyproject.toml`:** se agregó `session-inicial-spec-respaldo-vikingo.md` al
     `extend-exclude` de ruff: es un registro histórico de sesión con bloques de código embebidos,
     no código fuente; sin la exclusión `ruff format --check .` no puede pasar.
+    *Actualización (2026-09-07):* ese archivo fue eliminado del repositorio y la exclusión se
+    quitó del `extend-exclude` (queda `[".specify", ".opencode"]`).
 12. **Fallbacks internos de construcción:** ante campo inválido, los parsers acumulan el problema
     y continúan con un valor neutro; como hay `raise ConfigError` antes de devolver el `Config`,
     esos valores nunca son observables. Mantiene tipado estricto sin `Optional` en cascada.
