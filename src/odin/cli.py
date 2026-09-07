@@ -1,21 +1,27 @@
-"""Interfaz de línea de comandos de ODIN (Item 005).
+"""Interfaz de línea de comandos de ODIN (Items 005 y 006).
 
 Subcomando ``validate``: carga y valida el JSON de configuración
-(``odin.config.load_config``, Item 002), configura el logging
-(``odin.log.setup_logging``, Item 004), imprime una confirmación legible en
-stdout y registra el resultado en consola y archivo con secretos enmascarados.
+(``odin.config.load_config``, Item 002), ejecuta la validación completa del
+entorno local y de coherencia (``odin.validate.validate_config``, Item 006),
+imprime el reporte con severidades (errores y advertencias diferenciados) y
+registra el resultado en consola y archivo con secretos enmascarados
+(``odin.log.setup_logging``, Item 004). Con ``--strict`` las advertencias
+también fallan (exit code 2), útil como gate de despliegue o de CI.
+
 Los subcomandos ``run`` (Etapas 2-5) y ``service`` (Etapas 6-7) aún no se
 registran; el punto de extensión queda documentado en ``build_parser``.
 
 Convención de exit codes (constantes exportadas de este módulo):
 
-- ``EXIT_OK`` (0): operación exitosa (configuración válida).
+- ``EXIT_OK`` (0): operación exitosa (configuración válida, aunque tenga
+  advertencias salvo con ``--strict``).
 - ``EXIT_INTERNAL`` (1): error interno inesperado (bug, fallo de I/O no
   controlado); se imprime mensaje + traceback en stderr sin morir con una
   excepción sin manejar.
 - ``EXIT_CONFIG`` (2): error de configuración (archivo ilegible/inexistente,
-  JSON malformado, problema estructural o semántico, falta la ruta de config)
-  o de uso de la CLI (errores de argparse, p. ej. subcomando inexistente).
+  JSON malformado, problema estructural o semántico, verificación de entorno
+  fallida, falta la ruta de config) o de uso de la CLI (errores de argparse,
+  p. ej. subcomando inexistente).
 - 3 (fallo parcial) y 4 (fallo total) quedan reservados para el pipeline de
   la Etapa 5, fuera del alcance de este item.
 """
@@ -32,6 +38,14 @@ from logging import Logger
 from odin import __version__
 from odin.config import Config, ConfigError, load_config
 from odin.log import setup_logging
+from odin.validate import (
+    Severity,
+    ValidationReport,
+    render_stderr,
+    render_stdout,
+    report_from_config_error,
+    validate_config,
+)
 
 __all__ = [
     "ENV_CONFIG_VAR",
@@ -68,8 +82,8 @@ def build_parser() -> argparse.ArgumentParser:
         "validate",
         help="Valida el JSON de configuración.",
         description=(
-            "Carga y valida el JSON de configuración de ODIN (estructura y semántica), "
-            "configura el logging y registra el resultado."
+            "Carga y valida el JSON de configuración de ODIN (estructura, semántica, rutas "
+            "locales y coherencia), configura el logging y registra el resultado."
         ),
     )
     validate_parser.add_argument(
@@ -77,6 +91,14 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="RUTA",
         default=None,
         help=f"ruta al JSON de configuración; si se omite, usa la variable {ENV_CONFIG_VAR}.",
+    )
+    validate_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help=(
+            "trata las advertencias como errores (exit code 2); "
+            "útil como gate previo al despliegue."
+        ),
     )
     return parser
 
@@ -114,8 +136,50 @@ def _setup_logging_or_warn(config: Config) -> Logger | None:
         return None
 
 
+def _print_report(report: ValidationReport, *, strict: bool) -> None:
+    """Imprime el reporte: contexto a stdout, errores y veredicto inválido a stderr."""
+    stdout = render_stdout(report, strict=strict)
+    if stdout:
+        print(stdout)
+    stderr = render_stderr(report, strict=strict)
+    if stderr:
+        print(stderr, file=sys.stderr)
+
+
+def _log_report(report: ValidationReport, logger: Logger) -> None:
+    """Registra el resultado en el log: resumen + cada hallazgo ERROR/WARNING.
+
+    El reporte detallado no se duplica acá (ya salió por stdout/stderr); los
+    hallazgos bloqueantes y las advertencias sí, para que queden en el archivo
+    rotado cuando no hay consola (modo servicio, Etapa 7). La ruta de
+    ``private_key`` puede aparecer como ``***`` en el log porque
+    ``Config.iter_secret_fields`` la lista entre los secretos (postura
+    conservadora del Item 004, ver Decisions & Trade-offs del Item 006).
+    """
+    errors = report.count(Severity.ERROR)
+    warnings = report.count(Severity.WARNING)
+    resumen = f"{report.summary} | errores: {errors} | advertencias: {warnings}"
+    if errors:
+        logger.error("Configuración inválida: %s (%s)", report.config_path, resumen)
+    elif warnings:
+        logger.warning(
+            "Configuración válida con advertencias: %s (%s)", report.config_path, resumen
+        )
+    else:
+        logger.info("Configuración válida: %s (%s)", report.config_path, resumen)
+    for finding in report.errors:
+        logger.error("%s: %s", finding.field_path, finding.message)
+    for finding in report.warnings:
+        logger.warning("%s: %s", finding.field_path, finding.message)
+
+
 def _cmd_validate(args: argparse.Namespace) -> int:
-    """Ejecuta ``odin validate`` y devuelve el exit code."""
+    """Ejecuta ``odin validate`` y devuelve el exit code.
+
+    Orden obligatorio: ``validate_config`` (solo lectura) corre **antes** que
+    ``setup_logging``, cuyo ``mkdir`` del directorio de logs crearía
+    ``work_dir`` y enmascararía el hallazgo de "directorio inexistente".
+    """
     source = _resolve_config_source(args)
     if source is None:
         print(
@@ -124,20 +188,19 @@ def _cmd_validate(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return EXIT_CONFIG
+    strict = bool(args.strict)
     try:
         config = load_config(source)
     except ConfigError as exc:
-        print(f"Configuración inválida en '{source}':", file=sys.stderr)
-        print(exc, file=sys.stderr)
+        _print_report(report_from_config_error(exc, source), strict=strict)
         return EXIT_CONFIG
 
+    report = validate_config(config)
     logger = _setup_logging_or_warn(config)
-    resumen = f"bases: {len(config.databases)} | servidores SFTP: {len(config.servers)}"
+    _print_report(report, strict=strict)
     if logger is not None:
-        logger.info("Configuración válida: %s (%s)", config.config_path, resumen)
-    print(f"Configuración válida: {config.config_path}")
-    print(f"  {resumen}")
-    return EXIT_OK
+        _log_report(report, logger)
+    return EXIT_OK if report.is_valid(strict=strict) else EXIT_CONFIG
 
 
 def main(argv: Sequence[str] | None = None) -> int:
