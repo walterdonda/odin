@@ -1,0 +1,52 @@
+{
+  "databases": [
+    {
+      "name": "erp_principal",
+      "connection": "localhost/3050:/var/lib/firebird/data/erp.fdb",
+      "user": "SYSDBA",
+      "password": "masterkey",
+      "charset": "ISO8859_1"
+    }
+  ],
+  "compression": {
+    "level": "7",
+    "password": null
+  },
+  "servers": [
+    {
+      "name": "sitio-alterno-1",
+      "host": "203.0.113.10",
+      "port": "22",
+      "username": "odin",
+      "auth": { "method": "password", "password": "remote-secret" },
+      "remote_path": "/backups/firebird/"
+    }
+  ],
+  "notification": {
+    "to": "control@example.com",
+    "from": "odin-backups@example.com",
+    "smtp": {
+      "host": "smtp.example.com",
+      "port": 587,
+      "starttls": "yes",
+      "username": "odin-backups@example.com",
+      "password": "smtp-secret"
+    }
+  },
+  "local": {
+    "work_dir": "/var/backups/odin",
+    "retention_days": "7"
+  },
+  "scheduler": {
+    "enabled": "true",
+    "timezone": "America/Argentina/Buenos_Aires",
+    "jobs": [
+      {
+        "databases": ["erp_principal"],
+        "schedule": "0 2 * * *",
+        "on_misfire": "run_once",
+        "skip_if_running": true
+      }
+    ]
+  }
+}
