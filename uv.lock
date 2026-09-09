@@ -559,7 +559,7 @@ requires-dist = [
     { name = "apscheduler", specifier = ">=3.11" },
     { name = "paramiko", specifier = ">=3.5" },
     { name = "py7zr", specifier = ">=1.0" },
-    { name = "pywin32", marker = "sys_platform == 'win32'", specifier = ">=310" },
+    { name = "pywin32", marker = "sys_platform == 'win32'", specifier = ">=311" },
 ]
 
 [package.metadata.requires-dev]
