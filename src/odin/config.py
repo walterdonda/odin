@@ -27,6 +27,7 @@ from typing import Any, TypeVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from odin.paths import normalize_path
+from odin.gbak_finder import find_gbak
 
 __all__ = [
     "AuthMethod",
@@ -224,7 +225,7 @@ class Config:
 
     def validate_semantics(self) -> list[ConfigProblem]:
         """Validaciones cruzadas sobre el modelo ya construido.
-
+        
         Cubre unicidad de nombres, referencias de los jobs del scheduler y
         coherencia entre ``auth.method`` y los campos de credenciales.
         """
@@ -247,7 +248,19 @@ class Config:
                     )
         for index, server in enumerate(self.servers):
             problems.extend(_auth_problems(server.auth, f"{_ROOT}.servers[{index}].auth"))
+        
+        # New validation for gbak_path existence if provided
+        for index, db in enumerate(self.databases):
+            if db.gbak_path:
+                if not Path(db.gbak_path).exists():
+                    problems.append(
+                        ConfigProblem(
+                            field_path=f"{_ROOT}.databases[{index}].gbak_path",
+                            message=f"el binario gbak no se encuentra en la ruta especificada: {db.gbak_path}",
+                        )
+                    )
         return problems
+
 
     def iter_secret_fields(self) -> Iterator[tuple[str, str]]:
         """Yield-ea ``(field_path, valor)`` de los campos sensibles presentes.
