@@ -16,8 +16,8 @@ class TestBackupExecutor(unittest.TestCase):
             stderr=""
         )
         
-        result = self.executor.run_backup("db.fdb", "db.fbk")
-        self.assertTrue(result)
+        result = self.executor.run_backup("db_name", "db.fdb", "db.fbk")
+        self.assertTrue(result.success)
         mock_run.assert_called_once()
 
     @patch("subprocess.run")
@@ -29,8 +29,11 @@ class TestBackupExecutor(unittest.TestCase):
             stderr="Some error occurred"
         )
         
-        with self.assertRaises(GbakExecutionError):
-            self.executor.run_backup("db.fdb", "db.fbk")
+        result = self.executor.run_backup("db_name", "db.fdb", "db.fbk")
+        self.assertFalse(result.success)
+        self.assertIn("Some error occurred", result.error_message)
+
+
 
     @patch("subprocess.run")
     def test_run_backup_failure_pattern(self, mock_run):
@@ -41,8 +44,9 @@ class TestBackupExecutor(unittest.TestCase):
             stderr="Error: not a valid database"
         )
         
-        with self.assertRaises(GbakExecutionError):
-            self.executor.run_backup("db.int", "db.fbk")
+        result = self.executor.run_backup("db_name", "db.int", "db.fbk")
+        self.assertFalse(result.success)
+        self.assertIn("not a valid database", result.error_message)
 
     @patch("subprocess.run")
     def test_run_backup_timeout(self, mock_run):
@@ -50,7 +54,7 @@ class TestBackupExecutor(unittest.TestCase):
         mock_run.side_effect = subprocess.TimeoutExpired(cmd=["gbak"], timeout=10)
         
         with self.assertRaises(subprocess.TimeoutExpired):
-            self.executor.run_backup("db.fdb", "db.fbk")
+            self.executor.run_backup("db_name", "db.fdb", "db.fbk")
 
 if __name__ == "__main__":
     unittest.main()
