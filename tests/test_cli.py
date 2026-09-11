@@ -18,6 +18,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
+import py7zr
 import pytest
 
 from odin.backup import BackupResult, BatchBackupResult
@@ -397,14 +398,25 @@ def test_error_findings_are_logged_at_error_level(tmp_path: Path) -> None:
 
 # --- Item 019: subcomando run (fase de respaldo, exit codes 0/3/4) ---
 
+PAYLOAD = b"ODIN backup payload " * 64
 
-def _result(name: str, success: bool) -> BackupResult:
+
+def _result(name: str, success: bool, work_dir: Path) -> BackupResult:
+    """Resultado de respaldo; los exitosos escriben un ``.fbk`` real.
+
+    La CLI ahora comprime cada respaldo exitoso (Item 025), así que la ruta
+    debe existir en el ``work_dir`` temporal para que la fase de compresión
+    real culmine.
+    """
     if success:
+        backup_path = work_dir / f"{name}.fbk"
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        backup_path.write_bytes(PAYLOAD)
         return BackupResult(
             success=True,
             database_name=name,
-            backup_path=Path(f"/tmp/{name}.fbk"),
-            file_size_bytes=1024,
+            backup_path=backup_path,
+            file_size_bytes=len(PAYLOAD),
             duration_seconds=0.1,
         )
     return BackupResult(
@@ -443,10 +455,11 @@ def test_run_all_success_exits_0(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     config_path = _write_config(tmp_path)
+    work_dir = tmp_path / "work"
 
     def builder(databases: list[Any], work_dir: Path) -> BatchBackupResult:
         return BatchBackupResult(
-            results=[_result(db.name, True) for db in databases],
+            results=[_result(db.name, True, work_dir) for db in databases],
             success=True,
             total_duration_seconds=0.2,
         )
@@ -454,8 +467,14 @@ def test_run_all_success_exits_0(
     _install_fake_executor(monkeypatch, builder)
     assert main(["run", "--config", str(config_path)]) == EXIT_OK
     out = capsys.readouterr().out
+    assert "Respaldo y compresión finalizados" in out
     assert "1/1 base(s) con éxito" in out
     assert "OK    erp_principal" in out
+    assert str(work_dir / "erp_principal.fbk") in out
+    assert str(work_dir / "erp_principal.fbk.7z") in out
+    assert "→" in out
+    assert "bytes" in out
+    assert (work_dir / "erp_principal.fbk.7z").is_file()
 
 
 def test_run_partial_failure_exits_3(
@@ -465,7 +484,10 @@ def test_run_partial_failure_exits_3(
 
     def builder(databases: list[Any], work_dir: Path) -> BatchBackupResult:
         outcomes = [True, False]
-        results = [_result(db.name, ok) for db, ok in zip(databases, outcomes, strict=True)]
+        results = [
+            _result(db.name, ok, work_dir)
+            for db, ok in zip(databases, outcomes, strict=True)
+        ]
         return BatchBackupResult(results=results, success=False, total_duration_seconds=0.3)
 
     _install_fake_executor(monkeypatch, builder)
@@ -482,7 +504,7 @@ def test_run_total_failure_exits_4(
 
     def builder(databases: list[Any], work_dir: Path) -> BatchBackupResult:
         return BatchBackupResult(
-            results=[_result(db.name, False) for db in databases],
+            results=[_result(db.name, False, work_dir) for db in databases],
             success=False,
             total_duration_seconds=0.3,
         )
@@ -490,6 +512,122 @@ def test_run_total_failure_exits_4(
     _install_fake_executor(monkeypatch, builder)
     assert main(["run", "--config", str(config_path)]) == EXIT_FAILURE
     assert "0/1 base(s) con éxito" in capsys.readouterr().out
+
+
+def test_run_compression_failure_with_successful_backup_exits_4(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+
+    def builder(databases: list[Any], work_dir: Path) -> BatchBackupResult:
+        # El respaldo "exitoso" apunta a un .fbk que no existe: la compresión falla.
+        return BatchBackupResult(
+            results=[
+                BackupResult(
+                    success=True,
+                    database_name=db.name,
+                    backup_path=work_dir / f"{db.name}.fbk",
+                    file_size_bytes=10,
+                    duration_seconds=0.1,
+                )
+                for db in databases
+            ],
+            success=True,
+            total_duration_seconds=0.1,
+        )
+
+    _install_fake_executor(monkeypatch, builder)
+    assert main(["run", "--config", str(config_path)]) == EXIT_FAILURE
+    captured = capsys.readouterr()
+    assert "0/1 base(s) con éxito" in captured.out
+    assert "FALLO erp_principal" in captured.err
+    assert "compresión fallida" in captured.err
+    assert "no existe" in captured.err
+    # el respaldo sí ocurrió: su ruta y tamaño quedan en el mensaje de fallo
+    assert str(tmp_path / "work" / "erp_principal.fbk") in captured.err
+    assert "10 bytes" in captured.err
+
+
+def test_run_mixed_success_and_compression_failure_exits_3(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path, mutate=_with_second_database)
+
+    def builder(databases: list[Any], work_dir: Path) -> BatchBackupResult:
+        results = [
+            _result("erp_principal", True, work_dir),
+            BackupResult(
+                success=True,
+                database_name="erp_secundaria",
+                backup_path=work_dir / "erp_secundaria.fbk",
+                file_size_bytes=10,
+                duration_seconds=0.1,
+            ),
+        ]
+        return BatchBackupResult(results=results, success=True, total_duration_seconds=0.2)
+
+    _install_fake_executor(monkeypatch, builder)
+    assert main(["run", "--config", str(config_path)]) == EXIT_PARTIAL
+    captured = capsys.readouterr()
+    assert "1/2 base(s) con éxito" in captured.out
+    assert "FALLO erp_secundaria" in captured.err
+
+
+def test_run_all_compressions_fail_exits_4(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path, mutate=_with_second_database)
+
+    def builder(databases: list[Any], work_dir: Path) -> BatchBackupResult:
+        return BatchBackupResult(
+            results=[
+                BackupResult(
+                    success=True,
+                    database_name=db.name,
+                    backup_path=work_dir / f"{db.name}.fbk",
+                    file_size_bytes=10,
+                    duration_seconds=0.1,
+                )
+                for db in databases
+            ],
+            success=True,
+            total_duration_seconds=0.2,
+        )
+
+    _install_fake_executor(monkeypatch, builder)
+    assert main(["run", "--config", str(config_path)]) == EXIT_FAILURE
+    captured = capsys.readouterr()
+    assert "0/2 base(s) con éxito" in captured.out
+    assert captured.err.count("compresión fallida") == 2
+
+
+def test_run_encrypts_archives_when_password_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    password = "comp-prueba"
+    config_path = _write_config(
+        tmp_path,
+        mutate=lambda data: data["compression"].update(password=password),
+    )
+    work_dir = tmp_path / "work"
+
+    def builder(databases: list[Any], work_dir: Path) -> BatchBackupResult:
+        return BatchBackupResult(
+            results=[_result(db.name, True, work_dir) for db in databases],
+            success=True,
+            total_duration_seconds=0.1,
+        )
+
+    _install_fake_executor(monkeypatch, builder)
+    assert main(["run", "--config", str(config_path)]) == EXIT_OK
+
+    archive = work_dir / "erp_principal.fbk.7z"
+    assert archive.is_file()
+    with pytest.raises(py7zr.PasswordRequired), py7zr.SevenZipFile(archive, "r") as sevenzip:
+        sevenzip.extractall(path=tmp_path / "sin_clave")
+    with py7zr.SevenZipFile(archive, "r", password=password) as sevenzip:
+        sevenzip.extractall(path=tmp_path / "con_clave")
+    assert (tmp_path / "con_clave" / "erp_principal.fbk").read_bytes() == PAYLOAD
 
 
 def test_run_invalid_gbak_path_exits_4_with_clear_error(

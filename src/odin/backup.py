@@ -67,7 +67,13 @@ class GbakExecutionError(BackupError):
 
 @dataclass(frozen=True, slots=True)
 class BackupResult:
-    """Resultado de respaldar una base (éxito o fallo con causa)."""
+    """Resultado de respaldar una base (éxito o fallo con causa).
+
+    Incluye los datos de la compresión posterior (Item 025): ``success`` es
+    ``True`` solo si el respaldo **y** la compresión culminaron bien (el
+    cruce lo hace ``odin.cli``); los campos ``archive_*``/``compressed_*``
+    quedan vacíos cuando la compresión no se intentó.
+    """
 
     success: bool
     database_name: str
@@ -75,6 +81,10 @@ class BackupResult:
     file_size_bytes: int | None = None
     duration_seconds: float = 0.0
     error_message: str | None = None
+    archive_path: Path | None = None
+    compressed_size_bytes: int | None = None
+    compression_duration_seconds: float = 0.0
+    compression_error_message: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

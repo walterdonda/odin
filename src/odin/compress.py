@@ -40,10 +40,13 @@ import lzma
 import os
 import tempfile
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import py7zr
+
+from odin.backup import BackupResult
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +79,21 @@ class CompressionResult:
     duration_seconds: float = 0.0
     encrypted: bool = False
     error_message: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class BatchCompressionResult:
+    """Resultado de comprimir los respaldos exitosos de un lote.
+
+    ``results`` contiene solo las bases que se intentaron comprimir (los
+    respaldos fallidos se omiten, igual que en ``BatchBackupResult``).
+    ``success`` es ``True`` únicamente si hubo al menos un respaldo elegible y
+    todas las compresiones culminaron bien.
+    """
+
+    results: Sequence[CompressionResult]
+    success: bool
+    total_duration_seconds: float
 
 
 def archive_path_for(source_path: str | Path) -> Path:
@@ -172,6 +190,63 @@ def compress_backup(
         duration_seconds=duration,
         encrypted=encrypted,
     )
+
+
+class CompressionExecutor:
+    """Comprime secuencialmente los ``.fbk`` exitosos de un lote.
+
+    Aísla los fallos por base (una compresión fallida no interrumpe el resto)
+    y omite los respaldos fallidos, que ya se reportan en el lote de respaldo.
+    El nivel y la contraseña se resuelven en el constructor (``config`` en el
+    pipeline, primitivas en tests) y se reenvían a ``compress_backup()``.
+    """
+
+    def __init__(
+        self,
+        level: int = DEFAULT_COMPRESSION_LEVEL,
+        password: str | None = None,
+    ) -> None:
+        self.level = level
+        self.password = password
+
+    def run_batch_compression(self, backups: Sequence[BackupResult]) -> BatchCompressionResult:
+        """Comprime cada respaldo exitoso, aislando los fallos por base."""
+        start_time = time.perf_counter()
+        eligible: list[tuple[str, Path]] = []
+        for backup in backups:
+            if backup.success and backup.backup_path is not None:
+                eligible.append((backup.database_name, backup.backup_path))
+        if not eligible:
+            logger.info("Lote de compresión sin respaldos exitosos que comprimir")
+            return BatchCompressionResult(
+                results=[],
+                success=False,
+                total_duration_seconds=time.perf_counter() - start_time,
+            )
+
+        results = [self._compress_one(name, source) for name, source in eligible]
+        duration = time.perf_counter() - start_time
+        succeeded = sum(result.success for result in results)
+        logger.info(
+            "Lote de compresión finalizado: %d/%d exitosos en %.1f s",
+            succeeded,
+            len(results),
+            duration,
+        )
+        return BatchCompressionResult(
+            results=results,
+            success=succeeded == len(results),
+            total_duration_seconds=duration,
+        )
+
+    def _compress_one(self, database_name: str, source: Path) -> CompressionResult:
+        """Comprime un ``.fbk`` ya validado por la fase de respaldo."""
+        return compress_backup(
+            database_name,
+            source,
+            level=self.level,
+            password=self.password,
+        )
 
 
 def _filters_for_level(level: int) -> list[dict[str, int]]:

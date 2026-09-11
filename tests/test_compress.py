@@ -15,10 +15,12 @@ from unittest.mock import patch
 import py7zr
 import pytest
 
+from odin.backup import BackupResult
 from odin.compress import (
     DEFAULT_COMPRESSION_LEVEL,
     MAX_COMPRESSION_LEVEL,
     MIN_COMPRESSION_LEVEL,
+    CompressionExecutor,
     archive_path_for,
     compress_backup,
 )
@@ -398,3 +400,98 @@ def test_no_temporary_files_after_success(source_file: Path, tmp_path: Path) -> 
 
     assert result.success
     assert list(tmp_path.glob("*.tmp")) == []
+
+
+# --- lote de compresión (Item 024) ---
+
+
+def _successful_backup(tmp_path: Path, name: str = "erp_principal") -> BackupResult:
+    source = tmp_path / f"{name}.fbk"
+    source.write_bytes(PAYLOAD)
+    return BackupResult(
+        success=True,
+        database_name=name,
+        backup_path=source,
+        file_size_bytes=len(PAYLOAD),
+        duration_seconds=0.1,
+    )
+
+
+def _failed_backup(name: str = "erp_secundaria") -> BackupResult:
+    return BackupResult(
+        success=False,
+        database_name=name,
+        duration_seconds=0.1,
+        error_message="gbak falló",
+    )
+
+
+def test_batch_compresses_only_successful_backups(tmp_path: Path) -> None:
+    batch = CompressionExecutor().run_batch_compression(
+        [_successful_backup(tmp_path, "db1"), _failed_backup("db2")]
+    )
+
+    assert batch.success
+    assert [result.database_name for result in batch.results] == ["db1"]
+    assert batch.results[0].success
+    assert batch.results[0].archive_path == tmp_path / "db1.fbk.7z"
+    assert (tmp_path / "db1.fbk.7z").is_file()
+    assert batch.total_duration_seconds > 0
+
+
+def test_batch_isolates_a_compression_failure(tmp_path: Path) -> None:
+    missing = BackupResult(
+        success=True,
+        database_name="db2",
+        backup_path=tmp_path / "no_existe.fbk",
+        file_size_bytes=1,
+        duration_seconds=0.1,
+    )
+
+    batch = CompressionExecutor().run_batch_compression(
+        [_successful_backup(tmp_path, "db1"), missing]
+    )
+
+    assert not batch.success
+    assert [result.success for result in batch.results] == [True, False]
+    assert batch.results[0].archive_path is not None
+    assert batch.results[1].error_message is not None
+    assert "no existe" in batch.results[1].error_message
+    assert (tmp_path / "db1.fbk.7z").is_file()
+
+
+def test_batch_without_successful_backups_does_not_compress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[object, ...]] = []
+
+    def spy(*args: object, **kwargs: object) -> None:
+        calls.append(args)
+
+    monkeypatch.setattr("odin.compress.compress_backup", spy)
+
+    batch = CompressionExecutor().run_batch_compression([_failed_backup("db1")])
+
+    assert batch.results == []
+    assert not batch.success
+    assert calls == []
+
+
+def test_empty_batch_has_no_results() -> None:
+    batch = CompressionExecutor().run_batch_compression([])
+
+    assert batch.results == []
+    assert not batch.success
+
+
+def test_batch_forwards_level_and_password(tmp_path: Path) -> None:
+    batch = CompressionExecutor(level=9, password=PASSWORD).run_batch_compression(
+        [_successful_backup(tmp_path)]
+    )
+
+    assert batch.success
+    result = batch.results[0]
+    assert result.encrypted is True
+    assert result.archive_path is not None
+    with pytest.raises(py7zr.PasswordRequired):
+        _extract(result.archive_path, tmp_path / "sin_clave")

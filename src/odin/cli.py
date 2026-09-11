@@ -8,16 +8,18 @@ registra el resultado en consola y archivo con secretos enmascarados
 (``odin.log.setup_logging``, Item 004). Con ``--strict`` las advertencias
 también fallan (exit code 2), útil como gate de despliegue o de CI.
 
-Subcomando ``run``: ejecuta la fase de respaldo de la Etapa 2
-(``odin.backup.BackupExecutor``) sobre todas las bases de la configuración,
-de forma secuencial y con aislamiento de fallos por base. El subcomando
-``service`` (Etapas 6-7) aún no se registra; el punto de extensión queda
-documentado en ``build_parser``.
+Subcomando ``run``: ejecuta el respaldo (``odin.backup.BackupExecutor``) y la
+compresión 7z (``odin.compress.CompressionExecutor``) sobre todas las bases de
+la configuración, de forma secuencial y con aislamiento de fallos por base.
+Una base cuenta como exitosa solo si el respaldo y la compresión culminan bien
+(Item 025). El subcomando ``service`` (Etapas 6-7) aún no se registra; el punto
+de extensión queda documentado en ``build_parser``.
 
 Convención de exit codes (constantes exportadas de este módulo):
 
 - ``EXIT_OK`` (0): operación exitosa (configuración válida, aunque tenga
-  advertencias salvo con ``--strict``; respaldo de todas las bases exitoso).
+  advertencias salvo con ``--strict``; respaldo y compresión de todas las
+  bases exitosos).
 - ``EXIT_INTERNAL`` (1): error interno inesperado (bug, fallo de I/O no
   controlado); se imprime mensaje + traceback en stderr sin morir con una
   excepción sin manejar.
@@ -25,9 +27,11 @@ Convención de exit codes (constantes exportadas de este módulo):
   JSON malformado, problema estructural o semántico, verificación de entorno
   fallida, falta la ruta de config) o de uso de la CLI (errores de argparse,
   p. ej. subcomando inexistente).
-- ``EXIT_PARTIAL`` (3): algunas bases se respaldaron y otras fallaron.
-- ``EXIT_FAILURE`` (4): el respaldo falló por completo (ninguna base; p. ej.
-  gbak no encontrado o ``work_dir`` no creable).
+- ``EXIT_PARTIAL`` (3): algunas bases completaron respaldo y compresión y
+  otras fallaron (en cualquiera de las dos fases).
+- ``EXIT_FAILURE`` (4): respaldo y compresión fallaron por completo (ninguna
+  base completó ambas fases; p. ej. gbak no encontrado o ``work_dir`` no
+  creable).
 """
 
 from __future__ import annotations
@@ -37,10 +41,12 @@ import os
 import sys
 import traceback
 from collections.abc import Sequence
+from dataclasses import replace
 from logging import Logger
 
 from odin import __version__
-from odin.backup import BackupExecutor, BatchBackupResult
+from odin.backup import BackupExecutor, BackupResult, BatchBackupResult
+from odin.compress import BatchCompressionResult, CompressionExecutor
 from odin.config import Config, ConfigError, load_config
 from odin.log import setup_logging
 from odin.validate import (
@@ -112,12 +118,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser = subparsers.add_parser(
         "run",
-        help="Ejecuta el respaldo (gbak) de todas las bases configuradas.",
+        help="Ejecuta el respaldo (gbak) y la compresión 7z de las bases configuradas.",
         description=(
-            "Ejecuta la fase de respaldo de ODIN (gbak -b) sobre todas las bases "
-            "de la configuración, de forma secuencial y con aislamiento de fallos "
-            "por base. Los .fbk se guardan en local.work_dir con el patrón "
-            "<nombre>_<timestamp>.fbk."
+            "Ejecuta el respaldo (gbak -b) y la compresión 7z de cada base de la "
+            "configuración, de forma secuencial y con aislamiento de fallos por base. "
+            "Los artefactos se guardan en local.work_dir como "
+            "<nombre>_<timestamp>.fbk y su .fbk.7z. Una base cuenta como exitosa solo "
+            "si el respaldo y la compresión culminan bien (exit codes 0/3/4)."
         ),
     )
     run_parser.add_argument(
@@ -229,35 +236,99 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     return EXIT_OK if report.is_valid(strict=strict) else EXIT_CONFIG
 
 
+def _merge_compression_results(
+    batch: BatchBackupResult, compressed: BatchCompressionResult
+) -> BatchBackupResult:
+    """Cruza respaldo y compresión por base (Item 025).
+
+    Una base cuenta como exitosa solo si el respaldo y la compresión
+    culminaron bien: un fallo de compresión marca la base como fallida con
+    ``compression_error_message`` y conserva los datos del respaldo (ruta,
+    tamaño y duración) para el resumen.
+    """
+    by_name = {result.database_name: result for result in compressed.results}
+    merged: list[BackupResult] = []
+    for backup in batch.results:
+        compression = by_name.get(backup.database_name)
+        if not backup.success or backup.backup_path is None:
+            merged.append(backup)
+        elif compression is None:
+            merged.append(
+                replace(
+                    backup,
+                    success=False,
+                    compression_error_message="no se intentó la compresión del respaldo",
+                )
+            )
+        elif not compression.success:
+            merged.append(
+                replace(
+                    backup,
+                    success=False,
+                    compression_error_message=compression.error_message,
+                )
+            )
+        else:
+            merged.append(
+                replace(
+                    backup,
+                    archive_path=compression.archive_path,
+                    compressed_size_bytes=compression.compressed_size_bytes,
+                    compression_duration_seconds=compression.duration_seconds,
+                )
+            )
+    return replace(
+        batch,
+        results=merged,
+        success=bool(merged) and all(result.success for result in merged),
+        total_duration_seconds=batch.total_duration_seconds
+        + compressed.total_duration_seconds,
+    )
+
+
 def _print_backup_summary(batch: BatchBackupResult) -> None:
-    """Imprime el resumen del lote: totales a stdout, fallos a stderr."""
+    """Imprime el resumen del lote: totales a stdout, fallos a stderr.
+
+    Por base exitosa informa ambas fases (Item 026): el ``.fbk`` con tamaño y
+    duración del respaldo y el ``.fbk.7z`` con tamaño comprimido y duración de
+    la compresión. Los fallos distinguen respaldo y compresión.
+    """
     if batch.error_message is not None:
         print(f"Respaldo no ejecutado: {batch.error_message}", file=sys.stderr)
         return
     succeeded = sum(result.success for result in batch.results)
     print(
-        f"Respaldo finalizado: {succeeded}/{len(batch.results)} base(s) con éxito "
-        f"en {batch.total_duration_seconds:.1f} s."
+        f"Respaldo y compresión finalizados: {succeeded}/{len(batch.results)} base(s) "
+        f"con éxito en {batch.total_duration_seconds:.1f} s."
     )
     for result in batch.results:
         if result.success:
             print(
                 f"- OK    {result.database_name}: {result.backup_path} "
-                f"({result.file_size_bytes} bytes, {result.duration_seconds:.1f} s)"
+                f"({result.file_size_bytes} bytes, {result.duration_seconds:.1f} s) → "
+                f"{result.archive_path} ({result.compressed_size_bytes} bytes, "
+                f"{result.compression_duration_seconds:.1f} s)"
             )
         else:
-            print(
-                f"- FALLO {result.database_name}: {result.error_message}",
-                file=sys.stderr,
-            )
+            if result.compression_error_message is not None:
+                detail = f"compresión fallida: {result.compression_error_message}"
+                if result.backup_path is not None:
+                    detail += (
+                        f"; respaldo: {result.backup_path} "
+                        f"({result.file_size_bytes} bytes, {result.duration_seconds:.1f} s)"
+                    )
+            else:
+                detail = result.error_message or "fallo sin detalle"
+            print(f"- FALLO {result.database_name}: {detail}", file=sys.stderr)
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
-    """Ejecuta ``odin run``: fase de respaldo de la Etapa 2.
+    """Ejecuta ``odin run``: respaldo (gbak) + compresión 7z por base.
 
-    Exit codes: 0 si todas las bases se respaldaron, 3 si hubo una mezcla de
-    éxitos y fallos, 4 si falló todo o si no hay gbak disponible. Los errores
-    de configuración (carga/parseo) son 2, igual que en ``validate``.
+    Exit codes: 0 si todas las bases completaron respaldo y compresión, 3 si
+    hubo una mezcla de éxitos y fallos (en cualquier fase), 4 si falló todo o
+    si no hay gbak disponible. Los errores de configuración (carga/parseo) son
+    2, igual que en ``validate``.
     """
     source = _resolve_config_source(args)
     if source is None:
@@ -275,6 +346,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     logger = _setup_logging_or_warn(config)
     executor = BackupExecutor(timeout=config.local.gbak_timeout_sec)
+    compressor = CompressionExecutor(
+        level=config.compression.level,
+        password=config.compression.password,
+    )
 
     if logger is not None:
         logger.info(
@@ -283,6 +358,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
             config.local.work_dir,
         )
     batch = executor.run_batch_backup(config.databases, config.local.work_dir)
+    compressed = compressor.run_batch_compression(batch.results)
+    batch = _merge_compression_results(batch, compressed)
     _print_backup_summary(batch)
 
     succeeded = sum(result.success for result in batch.results)
