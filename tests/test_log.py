@@ -48,6 +48,7 @@ def _load_fixture_config(
     work_dir: Path | None = None,
     log_level: str | None = None,
     log_dir: Path | None = None,
+    compression_password: str | None = None,
 ) -> Config:
     data: dict[str, Any] = json.loads(LINUX_FIXTURE.read_text(encoding="utf-8"))
     data["local"]["work_dir"] = str(work_dir if work_dir is not None else tmp_path / "work")
@@ -55,6 +56,8 @@ def _load_fixture_config(
         data["local"]["log_level"] = log_level
     if log_dir is not None:
         data["local"]["log_dir"] = str(log_dir)
+    if compression_password is not None:
+        data["compression"]["password"] = compression_password
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps(data), encoding="utf-8")
     return load_config(config_path)
@@ -173,6 +176,17 @@ def test_masker_from_config_masks_fixture_secret() -> None:
     assert "***" in masked
 
 
+def test_masker_from_config_masks_compression_password(tmp_path: Path) -> None:
+    config = _load_fixture_config(tmp_path, compression_password="comp-secret")
+
+    masker = SecretMasker.from_config(config)
+
+    assert "comp-secret" in masker.secrets
+    masked = masker.mask("comprimiendo erp_principal con password comp-secret")
+    assert "comp-secret" not in masked
+    assert "***" in masked
+
+
 # --- setup_logging ---
 
 
@@ -285,6 +299,21 @@ def test_setup_logging_masks_interpolated_args_in_both_destinations(
     for output in (err, file_text):
         assert "masterkey" not in output
         assert "conectando a erp_principal con clave ***" in output
+
+
+def test_setup_logging_masks_compression_password(
+    tmp_path: Path,
+    odin_logger: logging.Logger,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = _load_fixture_config(tmp_path, compression_password="comp-secret")
+    logger = setup_logging(config)
+    logger.info("cifrando .7z con password %s", "comp-secret")
+    err = capsys.readouterr().err
+    file_text = (config.local.resolved_log_dir / LOG_FILENAME).read_text(encoding="utf-8")
+    for output in (err, file_text):
+        assert "comp-secret" not in output
+        assert "***" in output
 
 
 def test_setup_logging_masks_pem_block_in_file(tmp_path: Path, odin_logger: logging.Logger) -> None:
