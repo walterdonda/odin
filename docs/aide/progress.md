@@ -4,7 +4,7 @@
 
 **Leyenda:** 📋 Planificado · 🚧 En progreso · ✅ Completo · ⏸️ Diferido · ❌ Excluido
 
-**Última actualización:** 2026-09-11 (Lote A de la Etapa 3 completa: items 020, 021, 022, 023 y 027 ✅)
+**Última actualización:** 2026-09-11 (Etapa 3: Lotes A y B completos — items 020-027 ✅; pendiente Lote C 028-029)
 
 ---
 
@@ -72,15 +72,15 @@ Estado: 🚧
 
 ### Entregables
 - ✅ `src/odin/compress.py`: `.fbk → .fbk.7z` con py7zr, nivel configurable, manejo de destino existente (Items 020-022 ✅: `compress_backup()` + `CompressionResult` + `archive_path_for()`, validación del artefacto, errores operativos en el resultado, escritura atómica que preserva la copia previa y mapeo de nivel 0=store / 1-9=LZMA2 con validación de rango; 28 tests unitarios en `tests/test_compress.py` contando el cifrado del Item 023 y el logging del Item 027)
-- 📋 Reporte de tamaño original/comprimido y duración; extensión de `BackupResult` (Item 027 ✅: reporte de nivel, tamaños, ratio, duración y flag de cifrado en los logs de `odin.compress` con doble barrera de enmascarado; la extensión de `BackupResult` corresponde al Item 025, Lote B)
-- ✅ Opcional no bloqueante: cifrado AES-256 con `compression.password` (Item 023 ✅: habilitado con 7zAES de py7zr 1.1.3, cabecera sin cifrar por estabilidad del error de clave incorrecta, filtro AES explícito —py7zr solo lo inyecta cuando `filters is None`—; round trip con clave correcta y fallo con clave ausente/incorrecta)
-- 📋 Pipeline incremental en `odin run`: respaldo → compresión por base
+- ✅ Reporte de tamaño original/comprimido y duración; extensión de `BackupResult` (Items 025 y 027 ✅: `BackupResult` extendido con `archive_path`/`compressed_size_bytes`/`compression_duration_seconds`/`compression_error_message` —defaults compatibles—, cruce por base en `_cmd_run` y resumen de consola con `.fbk` + `.fbk.7z`, tamaños y duración por fase; logs de `odin.compress` con doble barrera de enmascarado)
+- ✅ Opcional no bloqueante: cifrado AES-256 con `compression.password` (Item 023 ✅: habilitado con 7zAES de py7zr 1.1.3, cabecera sin cifrar por estabilidad del error de clave incorrecta, filtro AES explícito —py7zr solo lo inyecta cuando `filters is None`—; round trip con clave correcta y fallo con clave ausente/incorrecta; cableado de `compression.password` verificado end-to-end en la CLI)
+- ✅ Pipeline incremental en `odin run`: respaldo → compresión por base (Items 024-026 ✅: `CompressionExecutor` + `BatchCompressionResult` con aislamiento de fallos, `BackupResult` extendido, `_cmd_run` comprime tras el respaldo y cruza el éxito por base, resumen con ambos artefactos y exit codes 0/3/4 según el pipeline completo; 33 tests en `tests/test_compress.py` y 38 en `tests/test_cli.py`)
 
 ### Criterios de aceptación
 - [x] Test ida y vuelta: comprimir/descomprimir con comparación byte a byte — unitario en `tests/test_compress.py` (Items 020 y 023: sin cifrado y con AES-256); la variante de integración queda en el Item 028
 - [x] Nivel de compresión configurable tiene efecto medible en el tamaño — verificado con datos sintéticos de redundancia de largo rango (Item 022): nivel 1 ≈ 4.5 MB vs nivel 9 ≈ 1.5 MB
 - [x] Fallo de compresión no deja `.7z` parciales huérfanos y produce error claro — Item 021: escritura a temporal + `os.replace`, limpieza en todo fallo y copia previa preservada; dobles de `py7zr` en `tests/test_compress.py`
-- [ ] Demo: `odin run` genera ambos archivos con tamaños informados
+- [ ] Demo: `odin run` genera ambos archivos con tamaños informados — cubierto por los tests e2e de los Items 025-026 (respaldo doblado + compresión real); la demo final con `gbak` real queda para el Item 029 (Lote C)
 
 ---
 
@@ -189,7 +189,7 @@ Estado: 📋
 | Funcionalidad | Estado | Etapa |
 |---|---|---|
 | F1. Respaldo Firebird 2.5 → 6 (gbak) | ✅ | 2 |
-| F2. Compresión 7z (nivel configurable, AES opcional) | 📋 | 3 |
+| F2. Compresión 7z (nivel configurable, AES opcional) | 🚧 | 3 |
 | F3. Configuración JSON legible OS-agnóstica + validación | 📋 | 1 |
 | F4. Transferencia SFTP con paramiko (reintentos, verificación) | 📋 | 4 |
 | F5. Notificación por correo (siempre, sin secretos) | 📋 | 5 |
@@ -202,7 +202,7 @@ Estado: 📋
 | Objetivo | Estado | Etapa |
 |---|---|---|
 | G1. Respaldo confiable Firebird 2.5–6 | 📋 | 2, 8 |
-| G2. Compresión 7z | 📋 | 3 |
+| G2. Compresión 7z | 🚧 | 3 |
 | G3. Distribución SFTP con reintentos | 📋 | 4 |
 | G4. Correo de trazabilidad en cada ejecución | 📋 | 5 |
 | G5. Instalación uniforme vía uv (Windows/Linux) | 📋 | 1, 8 |
@@ -234,9 +234,9 @@ Estado: 📋
 
 ## Próximo Paso
 
-La **Etapa 3 sigue en curso**: el Lote A (`src/odin/compress.py`, items
-020-023 y 027) quedó completo y verificado. Para continuar, en una **nueva
-sesión de chat** ejecutar `/speckit.aide.execute-batch 024-026` (Lote B:
-`CompressionExecutor` y pipeline `odin run`: respaldo → compresión) y después
-`/speckit.aide.execute-batch 028,029` (Lote C: integración, documentación y
-cierre de la etapa).
+La **Etapa 3 sigue en curso**: los Lotes A (`src/odin/compress.py`, items
+020-023 y 027) y B (pipeline `odin run` respaldo → compresión, items 024-026)
+quedaron completos y verificados. Para continuar, en una **nueva sesión de
+chat** ejecutar `/speckit.aide.execute-batch 028,029` (Lote C: tests de ida y
+vuelta/fallos, documentación del README, corrección del mensaje de
+`validate.py` sobre el cifrado y cierre de la etapa con demo final).
