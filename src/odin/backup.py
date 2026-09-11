@@ -192,18 +192,10 @@ class BackupExecutor:
             except Exception as e:
                 all_success = False
                 logger.error(f"Error during backup of {db.name}: {e}")
-                results.append(
-                    BackupResult(
-                        success=False,
-                        database_name=db.name,
-                        backup_path=None,
-                        file_size_bytes=None,
-                        duration_seconds=0.0,
-                        error_message=str(e),
-                    )
-                )
+                results.append(BackupResult(success=False, database_name=db.name, error_message=str(e)))
 
         total_duration = time.perf_counter() - start_time
         return BatchBackupResult(
             results=results, success=all_success, total_duration_seconds=total_duration
         )
+

@@ -13,7 +13,7 @@
 | Etapa | Nombre | Estado |
 |---|---|---|
 | 1 | Fundaciones: paquete, CLI, configuración JSON y validación | 🚧 |
-| 2 | Respaldo Firebird con gbak | 📋 |
+| 2 | Respaldo Firebird con gbak | 🚧 |
 | 3 | Compresión 7z | 📋 |
 | 4 | Transferencia SFTP con paramiko | 📋 |
 | 5 | Notificación por correo y flujo end-to-end one-shot | 📋 |
