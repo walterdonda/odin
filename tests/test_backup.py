@@ -75,7 +75,7 @@ def test_run_backup_with_config_builds_flags(
     assert result.success
     command = mock_run.call_args.args[0]
     assert command[:4] == [GBACK, "-b", "db.fdb", str(backup)]
-    assert command[4:] == ["-U", "sysdba", "-P", "masterkey"]
+    assert command[4:] == ["-user", "sysdba", "-password", "masterkey"]
 
 
 def test_run_backup_with_charset_and_role(executor: BackupExecutor, tmp_path: Path) -> None:
@@ -93,8 +93,10 @@ def test_run_backup_with_charset_and_role(executor: BackupExecutor, tmp_path: Pa
 
     assert result.success
     command = mock_run.call_args.args[0]
-    assert command[command.index("-E") : command.index("-E") + 2] == ["-E", "UTF8"]
-    assert command[command.index("-R") : command.index("-R") + 2] == ["-R", "admin"]
+    assert command[command.index("-role") : command.index("-role") + 2] == ["-role", "admin"]
+    # gbak no tiene switch de charset: el valor del config no debe viajar al comando
+    assert "UTF8" not in command
+    assert "-E" not in command
 
 
 def test_password_is_never_logged(

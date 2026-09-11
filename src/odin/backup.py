@@ -5,7 +5,9 @@ Responsabilidades:
 - Resolver el binario: ``databases[].gbak_path`` explícito o auto-detección
   (``odin.gbak_finder.find_gbak``); si no hay ninguno, ``GbakNotFoundError``.
 - Ejecutar ``gbak -b`` por base con timeout y parámetros de conexión
-  (``-U``, ``-P``, ``-R``, ``-E``), enmascarando la contraseña en los logs.
+  (``-user``, ``-password``, ``-role``), enmascarando la contraseña en los
+  logs. ``gbak`` no tiene switch de charset: el respaldo es transportable y el
+  charset de conexión no interviene, por eso ``charset`` no se pasa.
 - Validar el archivo resultante (existe, tamaño > 0 y legible).
 - Recorrer todas las bases de la configuración de forma secuencial y con
   aislamiento de fallos, creando ``local.work_dir`` si no existe y nombrando
@@ -86,10 +88,10 @@ class BatchBackupResult:
 
 
 def _masked_command(command: Sequence[str]) -> str:
-    """Representación del comando con el valor de ``-P`` enmascarado."""
+    """Representación del comando con el valor de ``-password`` enmascarado."""
     masked = list(command)
     for index, argument in enumerate(masked[:-1]):
-        if argument == "-P":
+        if argument in ("-password", "-pas", "-P"):
             masked[index + 1] = "********"
     return " ".join(masked)
 
@@ -238,14 +240,19 @@ class BackupExecutor:
         backup_path: str,
         db_config: DatabaseConfig | None,
     ) -> list[str]:
-        """Construye ``gbak -b`` con los parámetros de conexión disponibles."""
+        """Construye ``gbak -b`` con los parámetros de conexión disponibles.
+
+        Se usan los nombres completos de switch (``-user``, ``-password``,
+        ``-role``): ``-u`` choca con ``-use_all_space``, ``-p`` con
+        ``-page_size`` y ``-r`` con ``-recreate_database``. ``gbak`` no admite
+        ``-charset``, así que ``DatabaseConfig.charset`` no se pasa.
+        """
         command = [gbak_path, "-b", database_path, backup_path]
         if db_config is not None:
             for flag, value in (
-                ("-U", db_config.user),
-                ("-P", db_config.password),
-                ("-R", db_config.role),
-                ("-E", db_config.charset),
+                ("-user", db_config.user),
+                ("-password", db_config.password),
+                ("-role", db_config.role),
             ):
                 if value:
                     command.extend((flag, value))

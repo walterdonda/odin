@@ -108,8 +108,12 @@ falla no interrumpe a las siguientes:
    `null`, auto-detección por SO y versión de Firebird (rutas típicas de
    Windows/Linux y `PATH`).
 2. **Ejecuta `gbak -b`** con timeout propio (`databases[].gbak_timeout_sec` o,
-   si no, `local.gbak_timeout_sec`) y los parámetros `user`, `password`,
-   `role` y `charset` de cada base. La contraseña se enmascara en los logs.
+   si no, `local.gbak_timeout_sec`) y los parámetros de conexión `user`,
+   `password` y `role` de cada base (nombres completos de switch: `-user`,
+   `-password`, `-role`). La contraseña se enmascara en los logs. `gbak` no
+   admite un switch de charset: el respaldo transportable no depende del
+   charset de conexión, por eso `charset` se conserva en la configuración
+   pero no se pasa al comando.
 3. **Valida cada `.fbk`**: existe, no está vacío y es legible.
 4. Crea `local.work_dir` si no existe y guarda cada respaldo como
    `<nombre_bd>_<timestamp>.fbk` (timestamp `YYYYMMDD_HHMMSS`).

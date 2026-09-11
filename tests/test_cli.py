@@ -492,6 +492,21 @@ def test_run_total_failure_exits_4(
     assert "0/1 base(s) con éxito" in capsys.readouterr().out
 
 
+def test_run_invalid_gbak_path_exits_4_with_clear_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(
+        tmp_path,
+        mutate=lambda data: data["databases"][0].update(
+            gbak_path=str(tmp_path / "no-existe" / "gbak")
+        ),
+    )
+    assert main(["run", "--config", str(config_path)]) == EXIT_FAILURE
+    captured = capsys.readouterr()
+    assert "0/1 base(s) con éxito" in captured.out
+    assert "no se pudo ejecutar gbak" in captured.err
+
+
 def test_run_unusable_work_dir_exits_4(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

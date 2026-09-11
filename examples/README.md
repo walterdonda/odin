@@ -90,4 +90,6 @@ del `.7z` cuando se le asigna un valor (funcionalidad de la Etapa 3).
 > transferencia, notificación y scheduler). Hoy `odin validate` ya los
 > reconoce y verifica su tipo/rango, y `odin run` consume los de la Etapa 2:
 > `gbak_timeout_sec`, `log_level`/`log_dir` y los parámetros de conexión de
-> cada base (`user`, `password`, `role`, `charset`).
+> cada base (`user`, `password`, `role`). El `charset` se conserva en el
+> contrato pero no se pasa a `gbak` (no tiene switch de charset; el respaldo
+> transportable no depende del charset de conexión).

@@ -4,7 +4,7 @@
 
 **Leyenda:** 📋 Planificado · 🚧 En progreso · ✅ Completo · ⏸️ Diferido · ❌ Excluido
 
-**Última actualización:** 2026-09-11 (Item 019 completo ✅)
+**Última actualización:** 2026-09-11 (Etapa 2 completa ✅)
 
 ---
 
@@ -13,7 +13,7 @@
 | Etapa | Nombre | Estado |
 |---|---|---|
 | 1 | Fundaciones: paquete, CLI, configuración JSON y validación | 🚧 |
-| 2 | Respaldo Firebird con gbak | 🚧 |
+| 2 | Respaldo Firebird con gbak | ✅ |
 | 3 | Compresión 7z | 📋 |
 | 4 | Transferencia SFTP con paramiko | 📋 |
 | 5 | Notificación por correo y flujo end-to-end one-shot | 📋 |
@@ -47,7 +47,7 @@ Estado: 🚧
 
 ## Etapa 2 — Respaldo Firebird con gbak
 
-Estado: 🚧
+Estado: ✅
 
 ### Entregables
 - ✅ `src/odin/backup.py`: auto-detección de `gbak` por SO/versión + override `gbak_path`
@@ -56,13 +56,13 @@ Estado: 🚧
 - ✅ Múltiples bases por ejecución; charset, rol, usuario/contraseña pasados de forma segura
 - ✅ `odin run` ejecuta la fase de `ejecución` con exit codes apropiados
 - ✅ Modelo `BackupResult` reutilizable (estado, archivo, tamaño, duración, error) y `BatchBackupResult` para múltiples bases (Item 015 ✅)
-- 🚧 `src/odin/backup.py`: paso de `charset`, `role`, `user`, `password` a `gbak` sin exponer credenciales (Item 016 🚧)
+- ✅ `src/odin/backup.py`: paso de `role`, `user`, `password` a `gbak` sin exponer credenciales (Item 016 ✅: switches corregidos a los nombres completos `-user`/`-password`/`-role` tras comprobar con `gbak -?` real que `-U`/`-P`/`-R`/`-E` eran inválidos —`-E` es `-expand`—; `charset` no se pasa porque `gbak` no tiene switch de charset y el respaldo transportable no depende del charset de conexión; enmascarado de `-password` en logs; verificado con Firebird 5.0.4 real: `odin run` → `.fbk` y restore scratch con las 3 filas intactas)
 - ✅ Refactorización y limpieza de la Etapa 2 (Item 019 ✅: `odin run` integrado en la CLI — lote secuencial con `--config`/`ODIN_CONFIG`, resumen y exit codes 0/3/4 —, `BackupExecutor` con resolución de `gbak` por precedencia (`databases[].gbak_path` > ejecutor > auto-detección cacheada), `run_backup` que reporta todo error operativo en `BackupResult` (timeout incluido, ya no lanza), validación post-respaldo estricta (existe/no vacío/legible), `work_dir` autocreado y `BatchBackupResult.error_message` para fallos de lote; se retiró de `config.load_config` la comprobación de existencia de `gbak_path` que duplicaba `validate` y rompía configs cross-platform; logging consistente con la Etapa 1 y sin secretos; README con "Ejecución de respaldos (`odin run`)" y tabla de exit codes; test de integración endurecido (skip seguro, imagen oficial `firebirdsql/firebird`); limpieza de `D:/Backups/odin/logs/odin.log` y `README_COMPAT.md` con `.gitignore` ampliado; suite 231 passed + 1 skipped)
 
 ### Criterios de aceptación
-- [ ] `odin run` sobre Firebird de prueba produce `.fbk` íntegro (verificado con metadata gbak o restore scratch) (Item 018 🚧)
-- [ ] `gbak_path` inválido, base inaccesible y timeout generan error claro y exit code ≠ 0
-- [ ] Tests con mock de `subprocess` + test de integración marcado (`@pytest.mark.integration`) con Firebird real
+- [x] `odin run` sobre Firebird de prueba produce `.fbk` íntegro (verificado con metadata gbak o restore scratch) (Item 018 ✅) — Firebird 5.0.4 real (Docker Desktop): `odin run` → `.fbk` de 1536 bytes; `gbak -c` a base scratch → `SELECT COUNT(*)` = 3 filas con datos idénticos; test `tests/test_backup_integration.py` **1 passed in 4.08 s**
+- [x] `gbak_path` inválido, base inaccesible y timeout generan error claro y exit code ≠ 0 — `gbak_path` inexistente → exit 4 + "no se pudo ejecutar gbak" (test e2e en `tests/test_cli.py`); base inaccesible → exit 4 + `gbak: ERROR:I/O error ... "/var/lib/firebird/data/no_existe.fdb"`; timeout de 1 s sobre stub → exit 4 + "gbak excedió el timeout de 1 s"
+- [x] Tests con mock de `subprocess` + test de integración marcado (`@pytest.mark.integration`) con Firebird real — `tests/test_backup.py` (16 tests con `unittest.mock`) y `tests/test_backup_integration.py` ejecutado contra el contenedor oficial `firebirdsql/firebird` (con skip seguro si falta Docker o `gbak`)
 
 ---
 
@@ -188,7 +188,7 @@ Estado: 📋
 
 | Funcionalidad | Estado | Etapa |
 |---|---|---|
-| F1. Respaldo Firebird 2.5 → 6 (gbak) | 📋 | 2 |
+| F1. Respaldo Firebird 2.5 → 6 (gbak) | ✅ | 2 |
 | F2. Compresión 7z (nivel configurable, AES opcional) | 📋 | 3 |
 | F3. Configuración JSON legible OS-agnóstica + validación | 📋 | 1 |
 | F4. Transferencia SFTP con paramiko (reintentos, verificación) | 📋 | 4 |
@@ -207,7 +207,7 @@ Estado: 📋
 | G4. Correo de trazabilidad en cada ejecución | 📋 | 5 |
 | G5. Instalación uniforme vía uv (Windows/Linux) | 📋 | 1, 8 |
 | G6. Servicio residente con scheduler propio | 📋 | 6, 7 |
-| G7. Modo one-shot `odin run` compatible | 📋 | 2, 5 |
+| G7. Modo one-shot `odin run` compatible | 🚧 | 2, 5 |
 
 ## Requisitos No Funcionales
 
@@ -234,4 +234,7 @@ Estado: 📋
 
 ## Próximo Paso
 
-Revisar el progreso y, en una **nueva sesión de chat**, ejecutar `/speckit.aide.create-queue` para generar el primer lote de work items priorizados.
+La **Etapa 2 quedó cerrada** (F1 verificado sobre Firebird 5.0.4; la matriz
+2.5/5-6 se completa en la Etapa 8). Para continuar, en una **nueva sesión de
+chat** ejecutar `/speckit.aide.create-queue` y generar el lote de la
+**Etapa 3 — Compresión 7z**.
