@@ -32,7 +32,9 @@ Create tests in `tests/test_backup.py` using `unittest.mock` to simulate the exe
 - `src/odin/backup.py`
 
 ## Decisions & Trade- tradeoffs
-- To be updated during implementation.
+    - Mocking `subprocess.run` using `unittest.mock.patch` was chosen as it is standard for unit testing side-effect-heavy code in Python and avoids the overhead of managing a real Firebird/gbak environment.
+    - Decisions: Use `MagicMock` to control `returncode`, `stdout`, and `stderr`.
+
 
 ## Testing Prerequisites
 

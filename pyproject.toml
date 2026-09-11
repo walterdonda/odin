@@ -44,6 +44,9 @@ packages = ["src/odin"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+markers = [
+    "integration: integration tests"
+]
 
 [tool.coverage.run]
 source = ["src/odin"]

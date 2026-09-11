@@ -12,29 +12,19 @@ Extend the backup logic to iterate over all databases defined in the `databases`
 - [ ] Logs clearly indicate which database is currently being processed.
 
 ## Implementation Steps
-1. [ ] Update `BackupExecutor.run_backup` (or the orchestration logic) to accept a list of database configurations.
-2. [ ] Implement a loop to iterate over the list of `DatabaseConfig` objects.
-3. [ 
-    ] Implement the timestamp generation (using `datetime.now().strftime("%Y%m%d_%H%M%S")`).
-4. [ ] Implement the filename construction: `f"{db_name}_{timestamp}.fbk"`.
-5. [ ] Ensure the `backup_path` is correctly constructed within the `work_dir`.
-6. [ ] Integrate with the existing `BackupResult` or a new `BatchBackupResult` to report progress for the entire batch.
-
-## Testing Strategy
-- **Unit Tests**:
-    - Test the iteration logic using a list of mock database configurations.
-    - Verify that the generated filenames follow the expected pattern for different database names.
-    - Verify that the timestamp is included in the filename.
-- **Integration Tests**:
-    - Verify that running the batch process actually produces multiple files in the `work_dir` when multiple databases are configured.
-
-## Dependencies
-- `datetime` (standard library)
-- `src/odin/backup.py`
-- `src/odin/config.py`
+1. [x] Update `BackupExecutor.run_backup` (or the orchestration logic) to accept a list of database configurations.
+2. [x] Implement a loop to iterate over the list of `DatabaseConfig` objects.
+3. [x] Implement the timestamp generation (using `datetime.now().strftime("%Y%m%d_%H%M%S")`).
+4. [x] Implement the filename construction: `f"{db_name}_{timestamp}.fbk"`.
+5. [x] Ensure the `backup_path` is correctly constructed within the `work_dir`.
+6. [x] Integrate with the existing `BackupResult` or a new `BatchBackupResult` to report progress for the entire batch.
 
 ## Decisions & Trade-offs
-- To be updated during implementation.
+- Created `BatchBackupResult` to encapsulate results of multiple backups.
+- Implemented `run_batch_backup` in `BackupExecutor`.
+- Used `datetime.datetime.now().strftime("%Y%m%d_%H%M%S")` for unique filenames.
+- The batch process continues even if one database fails, reporting all results at the end.
+
 
 ## Testing Prerequisites
 

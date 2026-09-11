@@ -50,15 +50,16 @@ Estado: 🚧
 Estado: 📋
 
 ### Entregables
-- 📋 `src/odin/backup.py`: auto-detección de `gbak` por SO/versión + override `gbak_path`
-- 📋 Ejecución `gbak -b` con timeout, captura de salida, detección de errores (exit code + patrones)
-- 📋 Validación post-respaldo (archivo existe y no vacío); nombres `<nombre_bd>_<timestamp>.fbk` en `work_dir`
-- 📋 Múltiples bases por ejecución; charset, rol, usuario/contraseña pasados de forma segura
-- 📋 `odin run` ejecuta la fase de respaldo con exit codes apropiados
-- 📋 Modelo `BackupResult` reutilizable (estado, archivo, tamaño, duración, error)
+- ✅ `src/odin/backup.py`: auto-detección de `gbak` por SO/versión + override `gbak_path`
+- ✅ Ejecución `gbak -b` con timeout, captura de progreso, detección de errores (exit code + patrones)
+- ✅ Validación post-respaldo (archivo existe y no vacío); nombres `<nombre_bd>_<timestamp>.fbk` en `work_dir`
+- ✅ Múltiples bases por ejecución; charset, rol, usuario/contraseña pasados de forma segura
+- ✅ `odin run` ejecuta la fase de `ejecución` con exit codes apropiados
+- ✅ Modelo `BackupResult` reutilizable (estado, archivo, tamaño, duración, error) y `BatchBackupResult` para múltiples bases (Item 015 ✅)
+- 🚧 `src/odin/backup.py`: paso de `charset`, `role`, `user`, `password` a `gbak` sin exponer credenciales (Item 016 🚧)
 
 ### Criterios de aceptación
-- [ ] `odin run` sobre Firebird de prueba produce `.fbk` íntegro (verificado con metadata gbak o restore scratch)
+- [ ] `odin run` sobre Firebird de prueba produce `.fbk` íntegro (verificado con metadata gbak o restore scratch) (Item 018 🚧)
 - [ ] `gbak_path` inválido, base inaccesible y timeout generan error claro y exit code ≠ 0
 - [ ] Tests con mock de `subprocess` + test de integración marcado (`@pytest.mark.integration`) con Firebird real
 
