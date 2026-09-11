@@ -1,2 +1,0 @@
-2026-09-09 00:48:17,410 | WARNING  | odin | Configuración válida con advertencias: examples/config.windows.json (bases: 1 | servidores SFTP: 2 | jobs: 1 | scheduler: habilitado (America/Argentina/Buenos_Aires) | errores: 0 | advertencias: 1)
-2026-09-09 00:48:17,410 | WARNING  | odin | config: el archivo de configuración tiene permisos 644; se recomienda 600 (contiene credenciales en texto legible)

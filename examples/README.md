@@ -50,15 +50,20 @@ odin validate --config /ruta/al/config.json --strict  # advertencias → 2
 
 | Código | Significado |
 |---|---|
-| 0 | Configuración válida (puede tener advertencias) |
+| 0 | Configuración válida (puede tener advertencias) · `odin run`: todas las bases respaldadas |
 | 1 | Error interno inesperado |
 | 2 | Error de configuración, o advertencias con `--strict` |
+| 3 | `odin run`: fallo parcial (algunas bases respaldadas y otras con error) |
+| 4 | `odin run`: fallo total (ninguna base respaldada) |
 
 Tal como se commitean, los ejemplos devuelven **0** en Linux con un par de
 advertencias esperables y no bloqueantes (permisos 644 del archivo y
 `work_dir` de desarrollo no creable sin root). Con `--strict` devuelven **2**
 por esas mismas advertencias: están pensados como plantilla, no para pasar
 `--strict` sin editar.
+
+Una vez adaptados, `odin run --config /ruta/al/config.json` ejecuta la fase de
+respaldo: ver [`README.md`](../README.md#ejecución-de-respaldos-odin-run).
 
 ## Campos opcionales (no mostrados en los ejemplos)
 
@@ -83,4 +88,6 @@ del `.7z` cuando se le asigna un valor (funcionalidad de la Etapa 3).
 
 > Estos campos se consumen en las etapas posteriores (respaldo, compresión,
 > transferencia, notificación y scheduler). Hoy `odin validate` ya los
-> reconoce y verifica su tipo/rango.
+> reconoce y verifica su tipo/rango, y `odin run` consume los de la Etapa 2:
+> `gbak_timeout_sec`, `log_level`/`log_dir` y los parámetros de conexión de
+> cada base (`user`, `password`, `role`, `charset`).

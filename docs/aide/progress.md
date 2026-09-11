@@ -4,7 +4,7 @@
 
 **Leyenda:** 📋 Planificado · 🚧 En progreso · ✅ Completo · ⏸️ Diferido · ❌ Excluido
 
-**Última actualización:** 2026-09-07 (Item 007 completo ✅)
+**Última actualización:** 2026-09-11 (Item 019 completo ✅)
 
 ---
 
@@ -47,7 +47,7 @@ Estado: 🚧
 
 ## Etapa 2 — Respaldo Firebird con gbak
 
-Estado: 📋
+Estado: 🚧
 
 ### Entregables
 - ✅ `src/odin/backup.py`: auto-detección de `gbak` por SO/versión + override `gbak_path`
@@ -57,6 +57,7 @@ Estado: 📋
 - ✅ `odin run` ejecuta la fase de `ejecución` con exit codes apropiados
 - ✅ Modelo `BackupResult` reutilizable (estado, archivo, tamaño, duración, error) y `BatchBackupResult` para múltiples bases (Item 015 ✅)
 - 🚧 `src/odin/backup.py`: paso de `charset`, `role`, `user`, `password` a `gbak` sin exponer credenciales (Item 016 🚧)
+- ✅ Refactorización y limpieza de la Etapa 2 (Item 019 ✅: `odin run` integrado en la CLI — lote secuencial con `--config`/`ODIN_CONFIG`, resumen y exit codes 0/3/4 —, `BackupExecutor` con resolución de `gbak` por precedencia (`databases[].gbak_path` > ejecutor > auto-detección cacheada), `run_backup` que reporta todo error operativo en `BackupResult` (timeout incluido, ya no lanza), validación post-respaldo estricta (existe/no vacío/legible), `work_dir` autocreado y `BatchBackupResult.error_message` para fallos de lote; se retiró de `config.load_config` la comprobación de existencia de `gbak_path` que duplicaba `validate` y rompía configs cross-platform; logging consistente con la Etapa 1 y sin secretos; README con "Ejecución de respaldos (`odin run`)" y tabla de exit codes; test de integración endurecido (skip seguro, imagen oficial `firebirdsql/firebird`); limpieza de `D:/Backups/odin/logs/odin.log` y `README_COMPAT.md` con `.gitignore` ampliado; suite 231 passed + 1 skipped)
 
 ### Criterios de aceptación
 - [ ] `odin run` sobre Firebird de prueba produce `.fbk` íntegro (verificado con metadata gbak o restore scratch) (Item 018 🚧)

@@ -1,82 +1,94 @@
-import pytest
+"""Test de integración del flujo de respaldo con Firebird real (Item 018).
+
+Levanta un contenedor Docker oficial de Firebird (la propia imagen crea la
+base vía ``FIREBIRD_DATABASE``), apunta ``BackupExecutor`` al puerto publicado
+y verifica que el ``.fbk`` resultante existe y no está vacío. Se omite (skip)
+cuando Docker, su daemon o ``gbak`` no están disponibles, de modo que la suite
+unitaria corra en cualquier entorno.
+
+Variables de entorno (opcionales):
+
+- ``ODIN_FIREBIRD_IMAGE``: imagen a usar (por defecto
+  ``firebirdsql/firebird:latest``).
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
-from src.odin.backup import BackupExecutor, BackupResult
-from src.odin.config import DatabaseConfig
 
-@pytest.mark.integration
-@pytest.mark.skipif(
-    subprocess.run(["docker", "--version"], capture_output=True).returncode != 0,
-    reason="Docker not installed"
-)
-def test_firebird_integration_backup_flow(tmp_path):
-    """
-    Integration test: 
-    1. Start Firebird in Docker.
-    2. Execute gbak via BackupExecutor to backup the default database.
-    3. Verify .fbk file creation.
-    """
-    container_name = "firebird-test"
-    port = "3050"
-    
-    # Cleanup previous container if exists
-    subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
+import pytest
 
-    # 1. Start Firebird container
-    start_cmd = [
-        "docker", "run", "--name", container_name,
-        "-p", f"{port}:3050",
-        "-e", "FIREBIRD_PASSWORD=masterkey",
-        "-d", "jacobalberty/firebird:latest"
-    ]
+from odin.backup import BackupExecutor
+from odin.config import DatabaseConfig
+from odin.gbak_finder import find_gbak
+
+DOCKER = shutil.which("docker")
+GBACK = find_gbak()
+
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(DOCKER is None, reason="Docker no instalado en el host"),
+    pytest.mark.skipif(GBACK is None, reason="gbak no instalado en el host"),
+]
+
+CONTAINER = "odin-firebird-integration"
+IMAGE = os.environ.get("ODIN_FIREBIRD_IMAGE", "firebirdsql/firebird:latest")
+PASSWORD = "masterkey"
+DATABASE_NAME = "odin_integration.fdb"
+DATABASE_PATH = f"/var/lib/firebird/data/{DATABASE_NAME}"
+
+
+def _docker(*args: str) -> subprocess.CompletedProcess[str]:
+    assert DOCKER is not None
+    return subprocess.run([DOCKER, *args], capture_output=True, text=True)
+
+
+def test_backup_flow_against_firebird(tmp_path: Path) -> None:
+    assert GBACK is not None
+    _docker("rm", "-f", CONTAINER)
+    started = _docker(
+        "run",
+        "--name",
+        CONTAINER,
+        "-d",
+        "-P",
+        "-e",
+        f"FIREBIRD_ROOT_PASSWORD={PASSWORD}",
+        "-e",
+        f"FIREBIRD_DATABASE={DATABASE_NAME}",
+        IMAGE,
+    )
+    if started.returncode != 0:
+        pytest.skip(f"No se pudo iniciar el contenedor Firebird: {started.stderr.strip()}")
 
     try:
-        process = subprocess.run(start_cmd, capture_output=True, text=True)
-        if process.returncode != 0:
-            pytest.skip(f"Failed to start Firebird container: {process.stderr}")
-    except Exception as e:
-        pytest.skip(f"Error starting Firebird container: {e}")
-
-    try:
-        # Wait for Firebird to be ready
-        time.sleep(15) 
-
-        # We'll assume gbak is in PATH or we find it.
-        gbak_path = "gbak" 
-        
-        # We'll use the default database connection string. 
-        # In many Firebird images, the default DB is accessible via localhost:3050:/databases/system.fdb or similar.
-        # However, simpler: we just try to backup the default connection.
-        db_connection = f"localhost:{port}/sysdba"
-        backup_file = tmp_path / "test_backup.fbk"
-        
-        executor = BackupExecutor(gbak_path=gbak_path, timeout=60)
-        
-        # We'll try to backup the default database.
-        # Note: Since we don't know the exact path in the container, we try the system db.
-        # Using sysdba as user and masterkey as password.
-        db_config = DatabaseConfig(
-            name="test_db",
-            connection=db_connection,
+        mapped = _docker("port", CONTAINER, "3050/tcp").stdout.strip()
+        if not mapped:
+            pytest.skip("Docker no publicó el puerto 3050 del contenedor")
+        port = mapped.rsplit(":", 1)[1]
+        backup_file = tmp_path / DATABASE_NAME.replace(".fdb", ".fbk")
+        database = DatabaseConfig(
+            name="odin_integration",
+            connection=f"localhost/{port}:{DATABASE_PATH}",
             user="sysdba",
-            password="masterkey",
-            role=None,
-            charset=None,
-            gbak_path=None,
-            gbak_timeout_sec=30
+            password=PASSWORD,
         )
-        
-        result = executor.run_backup(
-            database_name=db_config.name,
-            database_path=db_config.connection,
-            backup_path=str(backup_file),
-            db_config=db_config
-        )
-        
-        assert result.success is True, f"Backup failed: {result.error_message}"
-        assert backup_file.exists()
-        assert backup_file.stat().st_size > 0
+        executor = BackupExecutor(GBACK, timeout=60)
 
+        deadline = time.monotonic() + 60
+        result = executor.run_backup(database.name, database.connection, str(backup_file), database)
+        while not result.success and time.monotonic() < deadline:
+            time.sleep(3)
+            result = executor.run_backup(
+                database.name, database.connection, str(backup_file), database
+            )
+
+        assert result.success, f"Respaldo falló: {result.error_message}"
+        assert backup_file.is_file()
+        assert backup_file.stat().st_size > 0
     finally:
-        subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
+        _docker("rm", "-f", CONTAINER)

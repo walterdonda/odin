@@ -82,18 +82,6 @@ cada uno con la ruta del campo implicado (p. ej. `config.servers[1].auth.private
 Los errores y el veredicto de invalidez van a stderr; el contexto y el veredicto
 de validez, a stdout.
 
-### Exit codes
-
-| Código | Significado |
-|---|---|
-| 0 | Configuración válida (puede tener advertencias) |
-| 1 | Error interno inesperado |
-| 2 | Error de configuración, de uso de la CLI, o advertencias con `--strict` |
-| 3 / 4 | Reservados: fallo parcial / total del pipeline (Etapa 5) |
-
-Con `--strict` las advertencias también devuelven 2: útil como gate previo al
-despliegue o en CI.
-
 ### Garantías
 
 - **Solo lectura:** `validate` no crea ni modifica archivos (el directorio de
@@ -105,4 +93,40 @@ despliegue o en CI.
 - **OS-agnóstico:** una ruta cuyo sabor (Windows o POSIX) no coincide con el
   sistema donde se ejecuta no es comprobable: se omite con una nota, nunca
   cuenta como error.
+
+## Ejecución de respaldos (`odin run`)
+
+```bash
+uv run odin run --config ruta/al/config.json     # o vía ODIN_CONFIG
+```
+
+`odin run` ejecuta la **fase de respaldo** de ODIN sobre todas las bases de la
+configuración, en forma secuencial y con aislamiento de fallos: una base que
+falla no interrumpe a las siguientes:
+
+1. **Resuelve `gbak`** por base: `databases[].gbak_path` explícito; si es
+   `null`, auto-detección por SO y versión de Firebird (rutas típicas de
+   Windows/Linux y `PATH`).
+2. **Ejecuta `gbak -b`** con timeout propio (`databases[].gbak_timeout_sec` o,
+   si no, `local.gbak_timeout_sec`) y los parámetros `user`, `password`,
+   `role` y `charset` de cada base. La contraseña se enmascara en los logs.
+3. **Valida cada `.fbk`**: existe, no está vacío y es legible.
+4. Crea `local.work_dir` si no existe y guarda cada respaldo como
+   `<nombre_bd>_<timestamp>.fbk` (timestamp `YYYYMMDD_HHMMSS`).
+
+La compresión 7z, la transferencia SFTP y el correo se sumarán al pipeline en
+las Etapas 3, 4 y 5; hoy `run` cubre solo el respaldo.
+
+## Exit codes
+
+| Código | Significado |
+|---|---|
+| 0 | `validate`: configuración válida (puede tener advertencias) · `run`: todas las bases respaldadas |
+| 1 | Error interno inesperado |
+| 2 | Error de configuración, de uso de la CLI, o advertencias con `--strict` |
+| 3 | `run`: fallo parcial (algunas bases respaldadas y otras con error) |
+| 4 | `run`: fallo total (ninguna base respaldada) |
+
+Con `--strict` las advertencias también devuelven 2: útil como gate previo al
+despliegue o en CI.
 

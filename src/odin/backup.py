@@ -1,201 +1,287 @@
-import datetime
+"""Ejecución de respaldos Firebird con ``gbak`` (Etapa 2).
+
+Responsabilidades:
+
+- Resolver el binario: ``databases[].gbak_path`` explícito o auto-detección
+  (``odin.gbak_finder.find_gbak``); si no hay ninguno, ``GbakNotFoundError``.
+- Ejecutar ``gbak -b`` por base con timeout y parámetros de conexión
+  (``-U``, ``-P``, ``-R``, ``-E``), enmascarando la contraseña en los logs.
+- Validar el archivo resultante (existe, tamaño > 0 y legible).
+- Recorrer todas las bases de la configuración de forma secuencial y con
+  aislamiento de fallos, creando ``local.work_dir`` si no existe y nombrando
+  los archivos ``<nombre_bd>_<timestamp>.fbk``.
+
+Los errores operativos esperados (timeout, fallo de gbak, binario inexistente,
+archivo inválido) no se propagan como excepción desde ``run_backup``: se
+reportan en el ``BackupResult`` con ``success=False`` y un mensaje claro, de
+modo que el lote continúe con la próxima base.
+"""
+
+from __future__ import annotations
+
 import logging
+import os
 import subprocess
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Optional, Sequence
+
+from odin.config import DatabaseConfig
+from odin.gbak_finder import find_gbak
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_GBACK_TIMEOUT_SEC = 7200
+_TIMESTAMP_FORMAT = "%Y%m%d_%H%M%S"
+
+_ERROR_PATTERNS = (
+    "not a valid database",
+    "permission denied",
+    "database is in use",
+    "unavailable database",
+)
+
 
 class BackupError(Exception):
-    """Base exception for backup operations."""
-    pass
+    """Error operativo de respaldo (base de los errores de la Etapa 2)."""
+
+
+class GbakNotFoundError(BackupError):
+    """No hay ``gbak_path`` configurado y la auto-detección no encontró gbak."""
 
 
 class GbakExecutionError(BackupError):
-    """Raised when gbak execution fails."""
+    """``gbak`` terminó con código distinto de 0 o con un patrón de error."""
 
-    def __init__(self, returncode: int, stdout: str, stderr: str):
+    def __init__(self, returncode: int, stdout: str, stderr: str) -> None:
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
-        super().__init__(f"gbak failed with exit and error: {stderr}")
+        detail = (stderr or stdout).strip() or "sin detalle"
+        super().__init__(f"gbak falló (código {returncode}): {detail}")
 
 
 @dataclass(frozen=True, slots=True)
 class BackupResult:
-    """Encapsulates the outcome of a backup operation."""
+    """Resultado de respaldar una base (éxito o fallo con causa)."""
 
     success: bool
     database_name: str
-    backup_path: Path | None
-    file_size_bytes: int | None
-    duration_seconds: float
-    error_message: str | None
+    backup_path: Path | None = None
+    file_size_bytes: int | None = None
+    duration_seconds: float = 0.0
+    error_message: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class BatchBackupResult:
-    """Encapsulates the outcome of multiple backup operations."""
+    """Resultado del respaldo de todas las bases configuradas."""
 
     results: Sequence[BackupResult]
     success: bool
     total_duration_seconds: float
+    error_message: str | None = None
+
+
+def _masked_command(command: Sequence[str]) -> str:
+    """Representación del comando con el valor de ``-P`` enmascarado."""
+    masked = list(command)
+    for index, argument in enumerate(masked[:-1]):
+        if argument == "-P":
+            masked[index + 1] = "********"
+    return " ".join(masked)
 
 
 class BackupExecutor:
-    """Handles the execution of gbak commands."""
+    """Ejecuta ``gbak -b`` por base y reporta el resultado de cada una."""
 
-    def __init__(self, gbak_path: str, timeout: int = 300):
-        self.gbak_path = gbak_path
+    def __init__(
+        self,
+        gbak_path: str | Path | None = None,
+        timeout: int = DEFAULT_GBACK_TIMEOUT_SEC,
+    ) -> None:
+        self.gbak_path = None if gbak_path is None else str(gbak_path)
         self.timeout = timeout
-        # Known error patterns in gbak/gbint output
-        self.error_patterns = [
-            "not a valid database",
-            "permission denied",
-            "database is in enough",
-            "database is in use",
-        ]
+
+    def _resolve_gbak_path(self, db_config: DatabaseConfig | None = None) -> str:
+        """Precedencia: ``gbak_path`` de la base > del ejecutor > detección.
+
+        Lanza ``GbakNotFoundError`` si no hay ninguna vía que resuelva el
+        binario; la auto-detección se cachea en el ejecutor.
+        """
+        if db_config is not None and db_config.gbak_path:
+            return db_config.gbak_path
+        if self.gbak_path is None:
+            found = find_gbak()
+            if found is None:
+                raise GbakNotFoundError(
+                    "no se encontró el binario gbak; instale Firebird o indique "
+                    "databases[].gbak_path en la configuración"
+                )
+            self.gbak_path = str(found)
+        return self.gbak_path
 
     def run_backup(
         self,
         database_name: str,
         database_path: str,
         backup_path: str,
-        db_config: Optional[DatabaseConfig] = None,
+        db_config: DatabaseConfig | None = None,
     ) -> BackupResult:
+        """Ejecuta ``gbak -b`` y valida el archivo resultante.
+
+        No propaga errores operativos: timeout, fallo de ``gbak``, binario
+        inexistente o archivo inválido se devuelven como ``BackupResult`` con
+        ``success=False``.
         """
-        Executes 'gbak -b' to create a backup.
-
-        Args:
-            database_name: Name of the database.
-            database_path: Path to the source Firepi database.
-            backup_path: Path where the .fbk file will be created.
-            db_config: Optional configuration containing user, password, role, and charset.
-
-        Returns:
-            A BackupResult object representing the outcome.
-        """
-        command = [self.gbak_path, "-b", database_path, backup_path]
-
-        if db_config:
-            if db_config.user:
-                command.extend(["-U", db_config.user])
-            if db_config.password:
-                command.extend(["-P", db_config.password])
-            if db_config.role:
-                command.extend(["-R", db_config.role])
-            if db_config.charset:
-                command.extend(["-E", db_config.charset])
-
         start_time = time.perf_counter()
-        error_message = None
-        success = False
-        backup_path_obj = Path(backup_path) if backup_path else None
-        file_size = None
-
-        # For logging, we want to hide the password
-        log_command = list(command)
-        if db_config and db_config.password:
-            for i, arg in enumerate(log_command):
-                if arg == "-P" and i + 1 < len(log_command):
-                    log_command[i + 1] = "********"
-        display_command = " ".join(log_command)
-        logger.info(f"Executing command: {display_command}")
+        target = Path(backup_path)
+        gbak_path: str | None = None
 
         try:
-            result = subprocess.run(command, capture_output=True, text=True, timeout=self.timeout)
-            stdout = result.stdout
-            stderr = result.stderr
+            gbak_path = self._resolve_gbak_path(db_config)
+            command = self._build_command(gbak_path, database_path, backup_path, db_config)
+            logger.info("Ejecutando gbak para '%s': %s", database_name, _masked_command(command))
+            completed = subprocess.run(
+                command, capture_output=True, text=True, timeout=self.timeout
+            )
+            self._check_completed(completed)
+            file_size = self._validate_backup_file(target)
+        except subprocess.TimeoutExpired:
+            return self._failure(
+                database_name,
+                start_time,
+                f"gbak excedió el timeout de {self.timeout} s",
+            )
+        except OSError as exc:
+            return self._failure(
+                database_name,
+                start_time,
+                f"no se pudo ejecutar gbak ({gbak_path}): {exc}",
+            )
+        except BackupError as exc:
+            return self._failure(database_name, start_time, str(exc))
 
-            # Check for known error patterns in stderr
-            for pattern in self.error_patterns:
-                if pattern in stderr.lower():
-                    raise GbakExecutionError(result.returncode, stdout, stderr)
-
-            if result.returncode != 0:
-                raise GbakExecutionError(result.returncode, stdout, stderr)
-
-            logger.info("Backup completed successfully.")
-            success = True
-            if backup_path_obj.exists():
-                file_size = backup_path_obj.stat().st_size
-
-        except subprocess.TimeoutExpired as e:
-            logger.error(f"Backup timed out after {self.timeout} seconds.")
-            error_message = f"Timeout after {self.timeout} seconds"
-            raise e
-        except GbakExecutionError as e:
-            error_message = str(e)
-        except Exception as e:
-            logger.error(f"Unexpected error during backup execution: {e}")
-            error_message = str(e)
-        finally:
-            duration = time.perf_counter() - start_time
-
+        duration = time.perf_counter() - start_time
+        logger.info(
+            "Respaldo exitoso de '%s': %s (%d bytes, %.1f s)",
+            database_name,
+            target,
+            file_size,
+            duration,
+        )
         return BackupResult(
-            success=success,
+            success=True,
             database_name=database_name,
-            backup_path=backup_path_obj if success else None,
+            backup_path=target,
             file_size_bytes=file_size,
             duration_seconds=duration,
-            error_message=error_message,
         )
 
     def run_batch_backup(
         self,
-            databases: Sequence["DatabaseConfig"],
-            work_dir: Path,
-        ) -> BatchBackupResult:
-        """
-        Iterates over a list of database configurations and executes backups.
+        databases: Sequence[DatabaseConfig],
+        work_dir: Path,
+    ) -> BatchBackupResult:
+        """Respalda secuencialmente cada base, aislando los fallos por base.
 
-        Args:
-            databases: Sequence of DatabaseConfig objects.
-            work_dir: Base directory where backups will be stored.
-
-        Returns:
-            A BatchBackupResult object representing the outcome of all backups.
+        Crea ``work_dir`` si no existe. Un fallo no interrumpe el lote: todas
+        las bases se intentan y el resultado agregado queda en
+        ``BatchBackupResult``.
         """
-        results: list[BackupResult] = []
         start_time = time.perf_counter()
-        all_success = True
+        work_dir = Path(work_dir)
+        try:
+            work_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            message = f"no se pudo preparar el directorio de trabajo {work_dir}: {exc}"
+            logger.error(message)
+            return BatchBackupResult(
+                results=[],
+                success=False,
+                total_duration_seconds=time.perf_counter() - start_time,
+                error_message=message,
+            )
 
-        for db in databases:
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_filename = f"{db.name}_{timestamp}.fbk"
-            backup_path = work_dir / backup_filename
-
-            logger.info(f"Processing database: {db.name}")
-
-            try:
-                # Use gbak_path from config if available, otherwise use default
-                gbak_path = db.gbak_path if db.gbak_path else self.gbak_path
-                executor = BackupExecutor(gbak_path, timeout=db.gbak_timeout_sec or self.timeout)
-
-                result = executor.run_backup(
-                    database_name=db.name,
-                    database_path=db.connection,
-                    backup_path=str(backup_path),
-                    db_config=db,
-                )
-                results.append(result)
-
-                if not result.success:
-                    all_success = False
-                    logger.error(f"Backup failed for {db.name}: {result.error_message}")
-                else:
-                    logger.info(f"Backup successful for {db.name}: {backup_path}")
-
-            except Exception as e:
-                all_success = False
-                logger.error(f"Error during backup of {db.name}: {e}")
-                results.append(BackupResult(success=False, database_name=db.name, error_message=str(e)))
-
-        total_duration = time.perf_counter() - start_time
+        results = [self._backup_one(database, work_dir) for database in databases]
+        duration = time.perf_counter() - start_time
+        succeeded = sum(result.success for result in results)
+        logger.info(
+            "Lote de respaldo finalizado: %d/%d exitosos en %.1f s",
+            succeeded,
+            len(results),
+            duration,
+        )
         return BatchBackupResult(
-            results=results, success=all_success, total_duration_seconds=total_duration
+            results=results,
+            success=bool(results) and succeeded == len(results),
+            total_duration_seconds=duration,
         )
 
+    def _backup_one(self, database: DatabaseConfig, work_dir: Path) -> BackupResult:
+        """Respalda una base, resolviendo su ``gbak_path`` y timeout propios."""
+        timestamp = datetime.now().strftime(_TIMESTAMP_FORMAT)
+        backup_path = work_dir / f"{database.name}_{timestamp}.fbk"
+        logger.info("Procesando base '%s' (%s)", database.name, database.connection)
+        executor = BackupExecutor(
+            database.gbak_path or self.gbak_path,
+            database.gbak_timeout_sec or self.timeout,
+        )
+        return executor.run_backup(database.name, database.connection, str(backup_path), database)
+
+    def _build_command(
+        self,
+        gbak_path: str,
+        database_path: str,
+        backup_path: str,
+        db_config: DatabaseConfig | None,
+    ) -> list[str]:
+        """Construye ``gbak -b`` con los parámetros de conexión disponibles."""
+        command = [gbak_path, "-b", database_path, backup_path]
+        if db_config is not None:
+            for flag, value in (
+                ("-U", db_config.user),
+                ("-P", db_config.password),
+                ("-R", db_config.role),
+                ("-E", db_config.charset),
+            ):
+                if value:
+                    command.extend((flag, value))
+        return command
+
+    @staticmethod
+    def _check_completed(completed: subprocess.CompletedProcess[str]) -> None:
+        """Falla si gbak devolvió código distinto de 0 o un patrón conocido."""
+        stderr = completed.stderr or ""
+        lowered = stderr.lower()
+        if completed.returncode != 0 or any(pattern in lowered for pattern in _ERROR_PATTERNS):
+            raise GbakExecutionError(completed.returncode, completed.stdout or "", stderr)
+
+    @staticmethod
+    def _validate_backup_file(path: Path) -> int:
+        """Valida el ``.fbk`` (existe, no vacío y legible) y devuelve su tamaño."""
+        if not path.exists():
+            raise BackupError(f"gbak no generó el archivo de respaldo: {path}")
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            raise BackupError(f"no se pudo leer el archivo de respaldo {path}: {exc}") from exc
+        if size <= 0:
+            raise BackupError(f"el archivo de respaldo está vacío: {path}")
+        if not os.access(path, os.R_OK):
+            raise BackupError(f"el archivo de respaldo no es legible: {path}")
+        return size
+
+    @staticmethod
+    def _failure(database_name: str, start_time: float, message: str) -> BackupResult:
+        """Construye y registra un ``BackupResult`` fallido."""
+        duration = time.perf_counter() - start_time
+        logger.error("Respaldo fallido de '%s': %s", database_name, message)
+        return BackupResult(
+            success=False,
+            database_name=database_name,
+            duration_seconds=duration,
+            error_message=message,
+        )

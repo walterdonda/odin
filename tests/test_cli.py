@@ -20,7 +20,16 @@ from typing import Any
 
 import pytest
 
-from odin.cli import ENV_CONFIG_VAR, EXIT_CONFIG, EXIT_INTERNAL, EXIT_OK, main
+from odin.backup import BackupResult, BatchBackupResult
+from odin.cli import (
+    ENV_CONFIG_VAR,
+    EXIT_CONFIG,
+    EXIT_FAILURE,
+    EXIT_INTERNAL,
+    EXIT_OK,
+    EXIT_PARTIAL,
+    main,
+)
 from odin.config import load_config
 from odin.log import LOG_FILENAME, LOGGER_NAME
 
@@ -220,11 +229,12 @@ def test_unexpected_exception_exits_1_with_traceback(
 # --- ayuda y uso ---
 
 
-def test_no_args_prints_help_listing_validate(capsys: pytest.CaptureFixture[str]) -> None:
+def test_no_args_prints_help_listing_subcommands(capsys: pytest.CaptureFixture[str]) -> None:
     assert main([]) == EXIT_OK
     out = capsys.readouterr().out
     assert "usage: odin" in out
     assert "validate" in out
+    assert "run" in out
 
 
 def test_unknown_subcommand_raises_systemexit_2() -> None:
@@ -234,7 +244,7 @@ def test_unknown_subcommand_raises_systemexit_2() -> None:
 
 
 def test_exit_code_constants_follow_convention() -> None:
-    assert (EXIT_OK, EXIT_INTERNAL, EXIT_CONFIG) == (0, 1, 2)
+    assert (EXIT_OK, EXIT_INTERNAL, EXIT_CONFIG, EXIT_PARTIAL, EXIT_FAILURE) == (0, 1, 2, 3, 4)
 
 
 # --- Item 006: validación completa (entorno, reporte y --strict) ---
@@ -383,3 +393,137 @@ def test_error_findings_are_logged_at_error_level(tmp_path: Path) -> None:
     assert "Configuración inválida" in content
     assert "ERROR" in content
     assert "config.local.work_dir" in content
+
+
+# --- Item 019: subcomando run (fase de respaldo, exit codes 0/3/4) ---
+
+
+def _result(name: str, success: bool) -> BackupResult:
+    if success:
+        return BackupResult(
+            success=True,
+            database_name=name,
+            backup_path=Path(f"/tmp/{name}.fbk"),
+            file_size_bytes=1024,
+            duration_seconds=0.1,
+        )
+    return BackupResult(
+        success=False,
+        database_name=name,
+        duration_seconds=0.1,
+        error_message="gbak falló (código 1): database is in use",
+    )
+
+
+def _install_fake_executor(
+    monkeypatch: pytest.MonkeyPatch,
+    builder: Callable[[list[Any], Path], BatchBackupResult],
+) -> None:
+    """Reemplaza ``BackupExecutor`` en la CLI por un lote controlado."""
+
+    class FakeBackupExecutor:
+        def __init__(self, gbak_path: Any = None, timeout: Any = None) -> None:
+            self.gbak_path = gbak_path
+            self.timeout = timeout
+
+        def run_batch_backup(self, databases: list[Any], work_dir: Path) -> BatchBackupResult:
+            return builder(databases, work_dir)
+
+    monkeypatch.setattr("odin.cli.BackupExecutor", FakeBackupExecutor)
+
+
+def _with_second_database(data: dict[str, Any]) -> None:
+    second = dict(data["databases"][0])
+    second["name"] = "erp_secundaria"
+    second["connection"] = "localhost/3050:/var/lib/firebird/data/erp2.fdb"
+    data["databases"].append(second)
+
+
+def test_run_all_success_exits_0(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+
+    def builder(databases: list[Any], work_dir: Path) -> BatchBackupResult:
+        return BatchBackupResult(
+            results=[_result(db.name, True) for db in databases],
+            success=True,
+            total_duration_seconds=0.2,
+        )
+
+    _install_fake_executor(monkeypatch, builder)
+    assert main(["run", "--config", str(config_path)]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "1/1 base(s) con éxito" in out
+    assert "OK    erp_principal" in out
+
+
+def test_run_partial_failure_exits_3(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path, mutate=_with_second_database)
+
+    def builder(databases: list[Any], work_dir: Path) -> BatchBackupResult:
+        outcomes = [True, False]
+        results = [_result(db.name, ok) for db, ok in zip(databases, outcomes, strict=True)]
+        return BatchBackupResult(results=results, success=False, total_duration_seconds=0.3)
+
+    _install_fake_executor(monkeypatch, builder)
+    assert main(["run", "--config", str(config_path)]) == EXIT_PARTIAL
+    captured = capsys.readouterr()
+    assert "1/2 base(s) con éxito" in captured.out
+    assert "FALLO erp_secundaria" in captured.err
+
+
+def test_run_total_failure_exits_4(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+
+    def builder(databases: list[Any], work_dir: Path) -> BatchBackupResult:
+        return BatchBackupResult(
+            results=[_result(db.name, False) for db in databases],
+            success=False,
+            total_duration_seconds=0.3,
+        )
+
+    _install_fake_executor(monkeypatch, builder)
+    assert main(["run", "--config", str(config_path)]) == EXIT_FAILURE
+    assert "0/1 base(s) con éxito" in capsys.readouterr().out
+
+
+def test_run_unusable_work_dir_exits_4(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+
+    def builder(databases: list[Any], work_dir: Path) -> BatchBackupResult:
+        return BatchBackupResult(
+            results=[],
+            success=False,
+            total_duration_seconds=0.0,
+            error_message="no se pudo preparar el directorio de trabajo",
+        )
+
+    _install_fake_executor(monkeypatch, builder)
+    assert main(["run", "--config", str(config_path)]) == EXIT_FAILURE
+    assert "Respaldo no ejecutado" in capsys.readouterr().err
+
+
+def test_run_missing_config_source_exits_2(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["run"]) == EXIT_CONFIG
+    assert "--config" in capsys.readouterr().err
+
+
+def test_run_invalid_config_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    roto = tmp_path / "roto.json"
+    roto.write_text("{esto no es json", encoding="utf-8")
+    assert main(["run", "--config", str(roto)]) == EXIT_CONFIG
+    assert "JSON malformado" in capsys.readouterr().err
+
+
+def test_run_help_lists_config_flag(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        main(["run", "--help"])
+    assert excinfo.value.code == 0
+    assert "--config" in capsys.readouterr().out

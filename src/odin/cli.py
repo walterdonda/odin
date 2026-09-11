@@ -1,4 +1,4 @@
-"""Interfaz de línea de comandos de ODIN (Items 005 y 006).
+"""Interfaz de línea de comandos de ODIN (Items 005, 006, 013 y 019).
 
 Subcomando ``validate``: carga y valida el JSON de configuración
 (``odin.config.load_config``, Item 002), ejecuta la validación completa del
@@ -8,13 +8,16 @@ registra el resultado en consola y archivo con secretos enmascarados
 (``odin.log.setup_logging``, Item 004). Con ``--strict`` las advertencias
 también fallan (exit code 2), útil como gate de despliegue o de CI.
 
-Los subcomandos ``run`` (Etapas 2-5) y ``service`` (Etapas 6-7) aún no se
-registran; el punto de extensión queda documentado en ``build_parser``.
+Subcomando ``run``: ejecuta la fase de respaldo de la Etapa 2
+(``odin.backup.BackupExecutor``) sobre todas las bases de la configuración,
+de forma secuencial y con aislamiento de fallos por base. El subcomando
+``service`` (Etapas 6-7) aún no se registra; el punto de extensión queda
+documentado en ``build_parser``.
 
 Convención de exit codes (constantes exportadas de este módulo):
 
 - ``EXIT_OK`` (0): operación exitosa (configuración válida, aunque tenga
-  advertencias salvo con ``--strict``).
+  advertencias salvo con ``--strict``; respaldo de todas las bases exitoso).
 - ``EXIT_INTERNAL`` (1): error interno inesperado (bug, fallo de I/O no
   controlado); se imprime mensaje + traceback en stderr sin morir con una
   excepción sin manejar.
@@ -22,8 +25,9 @@ Convención de exit codes (constantes exportadas de este módulo):
   JSON malformado, problema estructural o semántico, verificación de entorno
   fallida, falta la ruta de config) o de uso de la CLI (errores de argparse,
   p. ej. subcomando inexistente).
-- 3 (fallo parcial) y 4 (fallo total) quedan reservados para el pipeline de
-  la Etapa 5, fuera del alcance de este item.
+- ``EXIT_PARTIAL`` (3): algunas bases se respaldaron y otras fallaron.
+- ``EXIT_FAILURE`` (4): el respaldo falló por completo (ninguna base; p. ej.
+  gbak no encontrado o ``work_dir`` no creable).
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ from collections.abc import Sequence
 from logging import Logger
 
 from odin import __version__
+from odin.backup import BackupExecutor, BatchBackupResult
 from odin.config import Config, ConfigError, load_config
 from odin.log import setup_logging
 from odin.validate import (
@@ -50,8 +55,10 @@ from odin.validate import (
 __all__ = [
     "ENV_CONFIG_VAR",
     "EXIT_CONFIG",
+    "EXIT_FAILURE",
     "EXIT_INTERNAL",
     "EXIT_OK",
+    "EXIT_PARTIAL",
     "build_parser",
     "main",
 ]
@@ -59,18 +66,21 @@ __all__ = [
 EXIT_OK = 0
 EXIT_INTERNAL = 1
 EXIT_CONFIG = 2
+EXIT_PARTIAL = 3
+EXIT_FAILURE = 4
 ENV_CONFIG_VAR = "ODIN_CONFIG"
 
 
 def build_parser() -> argparse.ArgumentParser:
     """Construye el parser raíz de la CLI de ODIN.
 
-    Subcomandos registrados hoy: ``validate``. Punto de extensión: en este
-    ``subparsers`` se agregarán ``run`` (pipeline respaldo → compresión →
-    transferencia → correo, Etapas 2-5) y ``service`` (install/uninstall/
-    start/stop/status del modo residente, Etapas 6-7) cuando lleguen sus
-    etapas, cada uno con sus propios argumentos y reutilizando la resolución
-    ``--config``/``ODIN_CONFIG`` de este módulo.
+    Subcomandos registrados hoy: ``validate`` y ``run``. Punto de extensión:
+    en este ``subparsers`` se agregará ``service`` (install/uninstall/start/
+    stop/status del modo residente, Etapas 6-7) cuando llegue su etapa, con
+    sus propios argumentos y reutilizando la resolución
+    ``--config``/``ODIN_CONFIG`` de este módulo. Cuando lleguen la compresión
+    (Etapa 3), la transferencia (Etapa 4) y el correo (Etapa 5), ``run``
+    pasará a orquestar el pipeline completo en ``odin.pipeline``.
     """
     parser = argparse.ArgumentParser(
         prog="odin",
@@ -99,6 +109,22 @@ def build_parser() -> argparse.ArgumentParser:
             "trata las advertencias como errores (exit code 2); "
             "útil como gate previo al despliegue."
         ),
+    )
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Ejecuta el respaldo (gbak) de todas las bases configuradas.",
+        description=(
+            "Ejecuta la fase de respaldo de ODIN (gbak -b) sobre todas las bases "
+            "de la configuración, de forma secuencial y con aislamiento de fallos "
+            "por base. Los .fbk se guardan en local.work_dir con el patrón "
+            "<nombre>_<timestamp>.fbk."
+        ),
+    )
+    run_parser.add_argument(
+        "--config",
+        metavar="RUTA",
+        default=None,
+        help=f"ruta al JSON de configuración; si se omite, usa la variable {ENV_CONFIG_VAR}.",
     )
     return parser
 
@@ -203,6 +229,82 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     return EXIT_OK if report.is_valid(strict=strict) else EXIT_CONFIG
 
 
+def _print_backup_summary(batch: BatchBackupResult) -> None:
+    """Imprime el resumen del lote: totales a stdout, fallos a stderr."""
+    if batch.error_message is not None:
+        print(f"Respaldo no ejecutado: {batch.error_message}", file=sys.stderr)
+        return
+    succeeded = sum(result.success for result in batch.results)
+    print(
+        f"Respaldo finalizado: {succeeded}/{len(batch.results)} base(s) con éxito "
+        f"en {batch.total_duration_seconds:.1f} s."
+    )
+    for result in batch.results:
+        if result.success:
+            print(
+                f"- OK    {result.database_name}: {result.backup_path} "
+                f"({result.file_size_bytes} bytes, {result.duration_seconds:.1f} s)"
+            )
+        else:
+            print(
+                f"- FALLO {result.database_name}: {result.error_message}",
+                file=sys.stderr,
+            )
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    """Ejecuta ``odin run``: fase de respaldo de la Etapa 2.
+
+    Exit codes: 0 si todas las bases se respaldaron, 3 si hubo una mezcla de
+    éxitos y fallos, 4 si falló todo o si no hay gbak disponible. Los errores
+    de configuración (carga/parseo) son 2, igual que en ``validate``.
+    """
+    source = _resolve_config_source(args)
+    if source is None:
+        print(
+            "No se indicó el archivo de configuración: use --config <ruta> "
+            f"o defina la variable de entorno {ENV_CONFIG_VAR}.",
+            file=sys.stderr,
+        )
+        return EXIT_CONFIG
+    try:
+        config = load_config(source)
+    except ConfigError as exc:
+        print(exc, file=sys.stderr)
+        return EXIT_CONFIG
+
+    logger = _setup_logging_or_warn(config)
+    executor = BackupExecutor(timeout=config.local.gbak_timeout_sec)
+
+    if logger is not None:
+        logger.info(
+            "Iniciando respaldo de %d base(s) en %s",
+            len(config.databases),
+            config.local.work_dir,
+        )
+    batch = executor.run_batch_backup(config.databases, config.local.work_dir)
+    _print_backup_summary(batch)
+
+    succeeded = sum(result.success for result in batch.results)
+    if logger is not None:
+        if batch.error_message is not None:
+            logger.error("Respaldo no ejecutado: %s", batch.error_message)
+        else:
+            logger.info(
+                "Respaldo finalizado: %d/%d base(s) con éxito en %.1f s",
+                succeeded,
+                len(batch.results),
+                batch.total_duration_seconds,
+            )
+    if batch.error_message is not None or not batch.results:
+        return EXIT_FAILURE
+    if batch.success:
+        return EXIT_OK
+    if succeeded:
+        return EXIT_PARTIAL
+    return EXIT_FAILURE
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Ejecuta la CLI y devuelve el exit code (convención en el docstring del módulo).
 
@@ -224,6 +326,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "validate":
             return _cmd_validate(args)
+        if args.command == "run":
+            return _cmd_run(args)
         raise RuntimeError(f"subcomando no implementado: {args.command!r}")
     except ConfigError as exc:
         print(exc, file=sys.stderr)
