@@ -604,7 +604,7 @@ def _check_compression_and_retention(report: ValidationReport, config: Config) -
         report.add(
             Severity.INFO,
             f"{_ROOT}.compression.password",
-            f"configurado: el .7z se cifrará (AES-256, Etapa 3) con nivel {compression.level}",
+            f"configurado: el .7z se cifrará (AES-256) con nivel {compression.level}",
             check="compression_encryption",
         )
     retention = config.local.retention_days

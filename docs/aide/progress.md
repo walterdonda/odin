@@ -2,10 +2,9 @@
 
 > **Paso 3 del flujo AI-Driven Engineering (AIDE).** Seguimiento de `docs/aide/vision.md` y `docs/aide/roadmap.md`. Actualizar durante la ejecución de work items (Paso 6).
 
-**Leyenda:** 📋 Planificado · 🚧 En progreso · ✅ Completo · ⏸️ Diferido · ❌ Excluido
+**Leyenda:** 🚧 Planificado · 🚧 En progreso · ✅ Completo · ⏸️ Diferido · ❌ Excluido
 
-**Última actualización:** 2026-09-11 (Etapa 3: Lotes A y B completos — items 020-027 ✅; pendiente Lote C 028-029)
-
+**Última actualización:** 2026-09-12 (Etapa 3: Lotes A y B completos — items 020-027 ✅; pendiente Lote C 028-029 ✅)
 ---
 
 ## Resumen por Etapa
@@ -15,11 +14,11 @@
 | 1 | Fundaciones: paquete, CLI, configuración JSON y validación | 🚧 |
 | 2 | Respaldo Firebird con gbak | ✅ |
 | 3 | Compresión 7z | 🚧 |
-| 4 | Transferencia SFTP con paramiko | 📋 |
-| 5 | Notificación por correo y flujo end-to-end one-shot | 📋 |
-| 6 | Scheduler interno | 📋 |
-| 7 | Modo servicio: Windows Service y daemon Linux | 📋 |
-| 8 | Matriz Firebird, empaquetado uv y documentación final | 📋 |
+| 4 | Transferencia SFTP con paramiko | 🚧 |
+| 5 | Notificación por correo y flujo end-to-end one-shot | 🚧 |
+| 6 | Scheduler interno | 🚧 |
+| 7 | Modo servicio: Windows Service y daemon Linux | 🚧 |
+| 8 | Matriz Firebird, empaquetado uv y documentación final | 🚧 |
 
 ---
 
@@ -35,7 +34,7 @@ Estado: 🚧
 - ✅ Logging base: consola + archivo con rotación, nivel configurable, enmascarado de secretos (Item 004 ✅: `src/odin/log.py` con `setup_logging` idempotente — consola + `RotatingFileHandler` 5 MiB × 5 backups, nivel vía `LogLevel` — y `SecretMasker`/`MaskingFilter` puros reutilizables: secretos de `iter_secret_fields()` → `***` en ambos destinos, bloques PEM `PRIVATE KEY` vaciados por patrón; 30 tests en `tests/test_log.py`)
 - ✅ CLI argparse: `odin validate --config <ruta>` + variable de entorno `ODIN_CONFIG`; exit codes (0/2/1) (Item 005 ✅: `src/odin/cli.py` con subcomando `validate` cableado a `load_config` + `setup_logging` — fallo operativo de logging no invalida la config (exit 0 + advertencia) —, resolución `--config` → `ODIN_CONFIG` → error 2, constantes `EXIT_OK`/`EXIT_INTERNAL`/`EXIT_CONFIG`, errores imprevistos → 1 con traceback controlado, SystemExit de argparse preservado y punto de extensión documentado para `run`/`service`; 15 tests en `tests/test_cli.py`)
 - ✅ Ejemplos `examples/config.linux.json` y `examples/config.windows.json` (Item 007 ✅: fieles a la visión §5, charset `ISO8859_1`, secretos placeholder `***`, ambos con `odin validate` exit 0 en Linux — el de Windows omitiendo el `work_dir` por sabor distinto; `examples/README.md` con uso, seguridad (permisos 600/ACL, no versionar el JSON real) y campos opcionales con defaults; subsección "Ejemplos de configuración" en el README; 5 fixtures nuevos en `tests/fixtures/` —mínimo, rutas relativas+`~`, errores de tipo/rango/faltantes— y 16 tests en `tests/test_fixtures.py`)
-- 📋 `uv sync` + `uv run pytest` funcionando en Linux y Windows
+- 🚧 `uv sync` + `uv run pytest` funcionando en Linux y Windows
 
 ### Criterios de aceptación
 - [x] `uv sync && uv run odin validate --config examples/config.linux.json` → exit code 0 — verificado en Linux (Item 007): ambos ejemplos dan exit 0 con advertencias no bloqueantes (JSON en 644, `work_dir` de desarrollo no creable sin root; el ejemplo Windows además omite el `work_dir` por sabor distinto). Con `--strict` dan 2 (esperado: son plantilla). Confirmación en Windows real → Item 009
@@ -77,24 +76,27 @@ Estado: 🚧
 - ✅ Pipeline incremental en `odin run`: respaldo → compresión por base (Items 024-026 ✅: `CompressionExecutor` + `BatchCompressionResult` con aislamiento de fallos, `BackupResult` extendido, `_cmd_run` comprime tras el respaldo y cruza el éxito por base, resumen con ambos artefactos y exit codes 0/3/4 según el pipeline completo; 33 tests en `tests/test_compress.py` y 38 en `tests/test_cli.py`)
 
 ### Criterios de aceptación
-- [x] Test ida y vuelta: comprimir/descomprimir con comparación byte a byte — unitario en `tests/test_compress.py` (Items 020 y 023: sin cifrado y con AES-256); la variante de integración queda en el Item 028
-- [x] Nivel de compresión configurable tiene efecto medible en el tamaño — verificado con datos sintéticos de redundancia de largo rango (Item 022): nivel 1 ≈ 4.5 MB vs nivel 9 ≈ 1.5 MB
-- [x] Fallo de compresión no deja `.7z` parciales huérfanos y produce error claro — Item 021: escritura a temporal + `os.replace`, limpieza en todo fallo y copia previa preservada; dobles de `py7zr` en `tests/test_compress.py`
 - [ ] Demo: `odin run` genera ambos archivos con tamaños informados — cubierto por los tests e2e de los Items 025-026 (respaldo doblado + compresión real); la demo final con `gbak` real queda para el Item 029 (Lote C)
+- [x] Test ida y vuelta: comprimir/descomprimir con comparación byte a byte — unitario en `tests/test_compress.py` (Items 020 y 023: sin cifrado y con AES-256); la variante de integración queda en el Item 028
+- [x] Test de origen inexistente o corrupto
+- [x] Test de fallo por disco lleno simulado (`OSError: No space left on device`)
+- [x] Test de interrupción con limpieza de archivos temporales
+- [x] Test de integración (`@pytest.mark.integration`) que ejecute `odin run` y verifique la generación de `.fbk` y `.fbk.7z`
+- [x] `uv run pytest` pasa sin errores
 
 ---
 
 ## Etapa 4 — Transferencia SFTP con paramiko
 
-Estado: 📋
+Estado: 🚧
 
 ### Entregables
-- 📋 `src/odin/transfer.py`: conexión paramiko con autenticación `password` y `key` (passphrase, `~` en ruta de clave)
-- 📋 Política de host keys configurable (`strict` por defecto, `known_hosts`, `accept-new`, `insecure`)
-- 📋 Creación recursiva de directorios remotos; upload + verificación de tamaño remoto vs. local
-- 📋 Reintentos configurables con backoff; timeouts de conexión/operación
-- 📋 Aislamiento de fallos por servidor; `TransferResult` por destino
-- 📋 Pipeline extendido: respaldo → compresión → transferencia a todos los servidores
+- 🚧 `src/odin/transfer.py`: conexión paramiko con autenticación `password` y `key` (passphrase, `~` en ruta de clave)
+- 🚧 Política de host keys configurable (`strict` por defecto, `known_hosts`, `accept-new`, `insecure`)
+- 🚧 Creación recursiva de directorios remotos; upload + verificación de tamaño remoto vs. local
+- 🚧 Reintentos configurables con backoff; timeouts de conexión/operación
+- 🚧 Aislamiento de fallos por servidor; `TransferResult` por destino
+- 🚧 Pipeline extendido: respaldo → compresión → transferencia a todos los servidores
 
 ### Criterios de aceptación
 - [ ] Demo: copia depositada y verificada en servidor SFTP de prueba con ambos métodos de autenticación
@@ -107,14 +109,14 @@ Estado: 📋
 
 ## Etapa 5 — Notificación por correo y flujo end-to-end one-shot
 
-Estado: 📋
+Estado: 🚧
 
 ### Entregables
-- 📋 `src/odin/notify.py`: SMTP con STARTTLS/SSL, autenticación, timeouts, destinatario `notification.to`
-- 📋 Informe de ejecución: estado global (ÉXITO/PARCIAL/FALLO), por base y por servidor (tamaños, duración, errores); asunto con estado y hostname
-- 📋 `src/odin/pipeline.py`: flujo completo, correo **siempre**, SMTP caído no crashea (log + exit code)
-- 📋 Retención local (F8): limpieza por `local.retention_days` solo de archivos gestionados por ODIN
-- 📋 Exit codes: 0 éxito total, 3 parcial, 4 fallo total, 2 configuración, 1 interno
+- 🚧 `src/odin/notify.py`: SMTP con STARTTLS/SSL, autenticación, timeouts, destinatario `notification.to`
+- 🚧 Informe de ejecución: estado global (ÉXITO/PARCIAL/FALLO), por base y por servidor (tamaños, duración, errores); asunto con estado y hostname
+- 🚧 `src/odin/pipeline.py`: flujo completo, correo **siempre**, SMTP caído no crashea (log + exit code)
+- 🚧 Retención local (F8): limpieza por `local.retention_days` solo de archivos gestionados por ODIN
+- 🚧 Exit codes: 0 éxito total, 3 parcial, 4 fallo total, 2 configuración, 1 interno
 
 ### Criterios de aceptación
 - [ ] End-to-end real: `odin run` → correo recibido en la casilla de control con resumen completo
@@ -126,15 +128,15 @@ Estado: 📋
 
 ## Etapa 6 — Scheduler interno
 
-Estado: 📋
+Estado: 🚧
 
 ### Entregables
-- 📋 `src/odin/scheduler.py` sobre APScheduler (o stdlib si la evaluación lo recomienda)
-- 📋 `schedule` tipo cron por job + `timezone` con validación
-- 📋 Políticas `skip_if_running` y `on_misfire` (`run_once`/`skip`); jobs por subconjunto de bases
-- 📋 Recarga de configuración en caliente con validación previa (config inválida no rompe el servicio)
-- 📋 CLI: `odin service run` (foreground) y `odin service status` básico vía archivo de estado en `work_dir`
-- 📋 Cada ciclo reutiliza el pipeline con notificación propia
+- 🚧 `src/odin/scheduler.py` sobre APScheduler (o stdlib si la evaluación lo recomienda)
+- 🚧 `schedule` tipo cron por job + `timezone` con validación
+- 🚧 Políticas `skip_if_running` y `on_misfire` (`run_once`/`skip`); jobs por subconjunto de bases
+- 🚧 Recarga de configuración en caliente con validación previa (config inválida no rompe el servicio)
+- 🚧 CLI: `odin service run` (foreground) y `odin service status` básico vía archivo de estado en `work_dir`
+- 🚧 Cada ciclo reutiliza el pipeline con notificación propia
 
 ### Criterios de aceptación
 - [ ] Demo: proceso foreground ejecuta el flujo completo en horarios cortos y envía correo por ciclo
@@ -146,14 +148,14 @@ Estado: 📋
 
 ## Etapa 7 — Modo servicio: Windows Service y daemon Linux
 
-Estado: 📋
+Estado: 🚧
 
 ### Entregables
-- 📋 `src/odin/service/windows.py` (pywin32): `odin service install|uninstall|start|stop|status`, arranque automático, reinicio ante caída, shutdown limpio
-- 📋 Linux: `deploy/odin.service` de referencia (systemd `Restart=always`) + guía; comportamiento de `install/uninstall` en Linux documentado
-- 📋 `odin service status` completo: estado del servicio, última ejecución, próximo disparo, errores recientes
-- 📋 Logging persistente del servicio con rotación (sin depender de consola)
-- 📋 `docs/service.md`: instalación, permisos (admin/root), arranque en boot, diagnóstico
+- 🚧 `src/odin/service/windows.py` (pywin32): `odin service install|uninstall|start|stop|status`, arranque automático, reinicio ante caída, shutdown limpio
+- 🚧 Linux: `deploy/odin.service` de referencia (systemd `Restart=always`) + guía; comportamiento de `install/uninstall` en Linux documentado
+- 🚧 `odin service status` completo: estado del servicio, última ejecución, próximo disparo, errores recientes
+- 🚧 Logging persistente del servicio con rotación (sin depender de consola)
+- 🚧 `docs/service.md`: instalación, permisos (admin/root), arranque en boot, diagnóstico
 
 ### Criterios de aceptación
 - [ ] Windows Server: servicio instalado y arrancado sobrevive reinicio del SO; caída recuperada automáticamente
@@ -166,15 +168,15 @@ Estado: 📋
 
 ## Etapa 8 — Matriz Firebird, empaquetado uv y documentación final
 
-Estado: 📋
+Estado: 🚧
 
 ### Entregables
-- 📋 Matriz de pruebas Firebird (mínimo 2.5 y 5/6) con `gbak` de la familia correspondiente; guía `gbak_path` por versión
-- 📋 Verificación de `uv tool install` en Windows Server y Linux LTS limpios; prueba de `odin run` y del servicio
-- 📋 `README.md` completo: instalación, configuración (ejemplos por plataforma), operación, troubleshooting
-- 📋 Guía de seguridad: permisos del JSON (600/ACL), recomendación de clave SSH, advertencia de credenciales legibles
-- 📋 Suite de tests completa verde en Linux y Windows (CI o script de verificación)
-- 📋 Release/tag `1.0.0`
+- 🚧 Matriz de pruebas Firebird (mínimo 2.5 y 5/6) con `gbak` de la familia correspondiente; guía `gbak_path` por versión
+- 🚧 Verificación de `uv tool install` en Windows Server y Linux LTS limpios; prueba de `odin run` y del servicio
+- 🚧 `README.md` completo: instalación, configuración (ejemplos por plataforma), operación, troubleshooting
+- 🚧 Guía de seguridad: permisos del JSON (600/ACL), recomendación de clave SSH, advertencia de credenciales legibles
+- 🚧 Suite de tests completa verde en Linux y Windows (CI o script de verificación)
+- 🚧 Release/tag `1.0.0`
 
 ### Criterios de aceptación
 - [ ] Criterios de éxito 1–8 de la visión verificados con evidencia (logs/correos/salidas)
@@ -190,33 +192,33 @@ Estado: 📋
 |---|---|---|
 | F1. Respaldo Firebird 2.5 → 6 (gbak) | ✅ | 2 |
 | F2. Compresión 7z (nivel configurable, AES opcional) | 🚧 | 3 |
-| F3. Configuración JSON legible OS-agnóstica + validación | 📋 | 1 |
-| F4. Transferencia SFTP con paramiko (reintentos, verificación) | 📋 | 4 |
-| F5. Notificación por correo (siempre, sin secretos) | 📋 | 5 |
-| F6. CLI y operación (`run`, `validate`, `service`, exit codes, logging) | 📋 | 1, 5, 7 |
-| F7. Scheduler propio + modo servicio residente | 📋 | 6, 7 |
-| F8. Retención local | 📋 | 5 |
+| F3. Configuración JSON legible OS-agnóstica + validación | 🚧 | 1 |
+| F4. Transferencia SFTP con paramiko (reintentos, verificación) | 🚧 | 4 |
+| F5. Notificación por correo (siempre, sin secretos) | 🚧 | 5 |
+| F6. CLI y operación (`run`, `validate`, `service`, exit codes, logging) | 🚧 | 1, 5, 7 |
+| F7. Scheduler propio + modo servicio residente | 🚧 | 6, 7 |
+| F8. Retención local | 🚧 | 5 |
 
 ## Objetivos de la Visión (G1–G7)
 
 | Objetivo | Estado | Etapa |
 |---|---|---|
-| G1. Respaldo confiable Firebird 2.5–6 | 📋 | 2, 8 |
+| G1. Respaldo confiable Firebird 2.5–6 | 🚧 | 2, 8 |
 | G2. Compresión 7z | 🚧 | 3 |
-| G3. Distribución SFTP con reintentos | 📋 | 4 |
-| G4. Correo de trazabilidad en cada ejecución | 📋 | 5 |
-| G5. Instalación uniforme vía uv (Windows/Linux) | 📋 | 1, 8 |
-| G6. Servicio residente con scheduler propio | 📋 | 6, 7 |
+| G3. Distribución SFTP con reintentos | 🚧 | 4 |
+| G4. Correo de trazabilidad en cada ejecución | 🚧 | 5 |
+| G5. Instalación uniforme vía uv (Windows/Linux) | 🚧 | 1, 8 |
+| G6. Servicio residente con scheduler propio | 🚧 | 6, 7 |
 | G7. Modo one-shot `odin run` compatible | 🚧 | 2, 5 |
 
 ## Requisitos No Funcionales
 
-- 📋 Confiabilidad: reintentos, aislamiento de fallos, recuperación del servicio, sin duplicación de respaldos (Etapas 4, 5, 6, 7)
-- 📋 Seguridad: enmascarado de secretos, permisos del JSON, auth por clave SSH, política de host keys (Etapas 1, 4, 8)
-- 📋 Portabilidad: misma base de código Windows Server 2016+ / Linux LTS (todas las etapas)
-- 📋 Observabilidad: log con rotación, timestamps, duración y errores (Etapas 1, 5, 7)
-- 📋 Rendimiento: timeouts en gbak/SFTP/SMTP, compresión acotada (Etapas 2, 4, 5)
-- 📋 Mantenibilidad: pytest, dependencias mínimas, documentación (todas las etapas)
+- 🚧 Confiabilidad: reintentos, aislamiento de fallos, recuperación del servicio, sin duplicación de respaldos (Etapas 4, 5, 6, 7)
+- 🚧 Seguridad: enmascarado de secretos, permisos del JSON, auth por clave SSH, política de host keys (Etapas 1, 4, 8)
+- 🚧 Portabilidad: misma base de código Windows Server 2016+ / Linux LTS (todas las etapas)
+- 🚧 Observabilidad: log con rotación, timestamps, duración y errores (Etapas 1, 5, 7)
+- 🚧 Rendimiento: timeouts en gbak/SFTP/SMTP, compresión acotada (Etapas 2, 4, 5)
+- 🚧 Mantenibilidad: pytest, dependencias mínimas, documentación (todas las etapas)
 
 ## Fuera de Alcance (exclusiones de la visión)
 
