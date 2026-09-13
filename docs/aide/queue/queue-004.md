@@ -21,7 +21,7 @@ Implementar la gestión de políticas de `host keys` en `src/odin/transfer.py` s
 ### Item 032: Creación recursiva de directorios remotos y upload con verificación
 Añadir la funcionalidad de crear directorios de forma recursiva en el servidor remoto si no existen antes de iniciar la transferencia. Tras el upload de cada `.fbk.7z`, realizar una verificación post-transferencia comparando el tamaño del archivo local contra el `stat` remoto para garantizar la integridad.
 
-### Item 033: Reintentos configurables y manejo de timeouts
+### Item 033: Reintentos configurables y manejo de timeouts (✅ Completado)
 Implementar una política de reintentos con backoff configurable por servidor ante errores de red transitorios o timeouts de conexión/operación. Los errores no deben abortar el proceso completo si hay otros servidores en la cola; cada servidor debe tener su propio manejo de errores y reintentos.
 
 ### Item 034: Aislamiento de fallos por servidor y `TransferResult`

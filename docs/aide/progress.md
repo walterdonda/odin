@@ -2,9 +2,9 @@
 
 > **Paso 3 del flujo AI-Driven Engineering (AIDE).** Seguimiento de `docs/aide/vision.md` y `docs/aide/roadmap.md`. Actualizar durante la ejecución de work items (Paso 6).
 
-**Leyenda:** 🚧 Planificado · 🚧 En progreso · ✅ Completo · ⏸️ Diferido · ❌ Excluido
+**Leyenda:** 📋 Planificado · 🚧 En progreso · ✅ Completo · ⏸️ Diferido · ❌ Excluido
 
-**Última actualización:** 2026-09-12 (Etapa 3: Lotes A y B completos — items 020-027 ✅; pendiente Lote C 028-029 ✅)
+**Última actualización:** 2026-09-12 (Etapa 3: Lotes A, B y C completados ✅)
 ---
 
 ## Resumen por Etapa
@@ -13,7 +13,7 @@
 |---|---|---|
 | 1 | Fundaciones: paquete, CLI, configuración JSON y validación | 🚧 |
 | 2 | Respaldo Firebird con gbak | ✅ |
-| 3 | Compresión 7z | 🚧 |
+| 3 | Compresión 7z | ✅ |
 | 4 | Transferencia SFTP con paramiko | 🚧 |
 | 5 | Notificación por correo y flujo end-to-end one-shot | 🚧 |
 | 6 | Scheduler interno | 🚧 |
@@ -86,7 +86,7 @@ Estado: 🚧
 
 ---
 
-## Etapa 4 — Transferencia SFTP con paramiko
+## Etapa 4 — Transferencia SFFTP con paramiko
 
 Estado: 🚧
 
@@ -97,6 +97,7 @@ Estado: 🚧
 - 🚧 Reintentos configurables con backoff; timeouts de conexión/operación
 - 🚧 Aislamiento de fallos por servidor; `TransferResult` por destino
 - 🚧 Pipeline extendido: respaldo → compresión → transferencia a todos los servidores
+- ✅ `src/odin/transfer.py`: Implementación de reintentos y timeouts completada (Item 033)
 
 ### Criterios de aceptación
 - [ ] Demo: copia depositada y verificada en servidor SFTP de prueba con ambos métodos de autenticación

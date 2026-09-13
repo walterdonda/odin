@@ -36,6 +36,9 @@ from logging.handlers import RotatingFileHandler
 
 from odin.config import Config, LogLevel
 
+LOGGER_NAME = "odin"
+logger = logging.getLogger(LOGGER_NAME)
+
 __all__ = [
     "DEFAULT_BACKUP_COUNT",
     "DEFAULT_MAX_BYTES",
@@ -48,6 +51,7 @@ __all__ = [
     "SecretMasker",
     "setup_logging",
 ]
+
 
 LOGGER_NAME = "odin"
 LOG_FILENAME = "odin.log"

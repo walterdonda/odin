@@ -132,7 +132,7 @@ class ServerAuth:
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class ServerConfig:
-    """Servidor SFTP destino de las copias."""
+    """Servidor SFFTP destino de las copias."""
 
     name: str
     host: str
@@ -141,6 +141,11 @@ class ServerConfig:
     auth: ServerAuth
     remote_path: str
     host_key_policy: HostKeyPolicy = HostKeyPolicy.STRICT
+    sftp_retries: int = 3
+    sftp_connect_timeout_sec: int = 30
+    sftp_operation_timeout_sec: int = 60
+    sftp_retry_backoff_base: float = 2.0
+    sftp_retry_max_delay_sec: float = 30.0
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -547,9 +552,7 @@ def _parse_auth(v: _Validator, raw: dict[str, Any], path: str, base_dir: Path) -
     )
 
 
-_SERVER_FIELDS = frozenset(
-    {"name", "host", "port", "username", "auth", "remote_path", "host_key_policy"}
-)
+_SERVER_FIELDS = frozenset({"name", "host", "port", "username", "auth", "remote_path", "host_key_policy", "sftp_retries", "sftp_connect_timeout_sec", "sftp_operation_timeout_sec"})
 
 
 def _parse_server(v: _Validator, raw: dict[str, Any], path: str, base_dir: Path) -> ServerConfig:

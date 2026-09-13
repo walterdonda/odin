@@ -25,7 +25,7 @@ import os
 import re
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 
-__all__ = ["expand_user", "is_windows_flavor", "normalize_path"]
+__all__ = ["expand_user", "is_windows_flavor", "normalize_path", "resolve_path"]
 
 _DRIVE_RE = re.compile(r"^[A-Za-z]:")
 
@@ -78,3 +78,10 @@ def normalize_path(raw: str, *, base_dir: Path | str | None = None) -> Path:
     if pure.is_absolute() or base_dir is None:
         return Path(canonical)
     return Path(base_dir) / canonical
+
+
+def resolve_path(raw: str, base_dir: Path | str | None = None) -> Path:
+    """Resuelve una ruta de forma definitiva utilizando la lógica de normalización.
+    """
+    return normalize_path(raw, base_dir=base_dir)
+
