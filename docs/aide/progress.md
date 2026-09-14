@@ -4,7 +4,7 @@
 
 **Leyenda:** 📋 Planificado · 🚧 En progreso · ✅ Completo · ⏸️ Diferido · ❌ Excluido
 
-**Última actualización:** 2026-09-12 (Etapa 3: Lotes A, B y C completados ✅)
+**Última actualización:** 2026-09-14 (Etapa 4: Item 034 completado ✅ — aislamiento de fallos por servidor y `TransferResult`)
 ---
 
 ## Resumen por Etapa
@@ -95,7 +95,7 @@ Estado: 🚧
 - 🚧 Política de host keys configurable (`strict` por defecto, `known_hosts`, `accept-new`, `insecure`)
 - 🚧 Creación recursiva de directorios remotos; upload + verificación de tamaño remoto vs. local
 - 🚧 Reintentos configurables con backoff; timeouts de conexión/operación
-- 🚧 Aislamiento de fallos por servidor; `TransferResult` por destino
+- ✅ Aislamiento de fallos por servidor y `TransferResult` por destino (Item 034 ✅: `TransferExecutor.run_batch_transfer()` recorre todos los `ServerConfig` y devuelve un `TransferResult` por destino —estado, tamaño verificado, duración y error— aunque un servidor falle tras agotar los reintentos; reenvía a `SFTPTransfer` los reintentos/timeouts/backoff y la política de host keys de cada servidor, cierra la conexión siempre (`finally`) y detecta el origen ausente antes de conectar; 8 tests nuevos en `tests/test_transfer_executor.py`; correcciones de integración necesarias: el auth ya no se reintenta y se usa el `set_missing_host_key_policy` real de paramiko; suite 295 passed + 1 skipped en ~5 s)
 - 🚧 Pipeline extendido: respaldo → compresión → transferencia a todos los servidores
 - ✅ `src/odin/transfer.py`: Implementación de reintentos y timeouts completada (Item 033)
 
@@ -237,9 +237,9 @@ Estado: 🚧
 
 ## Próximo Paso
 
-La **Etapa 3 sigue en curso**: los Lotes A (`src/odin/compress.py`, items
-020-023 y 027) y B (pipeline `odin run` respaldo → compresión, items 024-026)
-quedaron completos y verificados. Para continuar, en una **nueva sesión de
-chat** ejecutar `/speckit.aide.execute-batch 028,029` (Lote C: tests de ida y
-vuelta/fallos, documentación del README, corrección del mensaje de
-`validate.py` sobre el cifrado y cierre de la etapa con demo final).
+La **Etapa 4 está en curso**: el Item 034 (aislamiento de fallos por servidor
+y `TransferResult`) quedó completo y los items 030-033 tienen su implementación
+y tests en verde. Para continuar, en una **nueva sesión de chat** ejecutar
+`/speckit.aide.execute-batch 035-038` (Lote B: integración de la transferencia
+en `odin run`, reporte del resumen, tests de integración y verificación de
+enmascarado).
