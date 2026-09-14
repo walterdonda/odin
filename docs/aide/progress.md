@@ -4,7 +4,7 @@
 
 **Leyenda:** 📋 Planificado · 🚧 En progreso · ✅ Completo · ⏸️ Diferido · ❌ Excluido
 
-**Última actualización:** 2026-09-14 (Etapa 4: Item 034 completado ✅ — aislamiento de fallos por servidor y `TransferResult`)
+**Última actualización:** 2026-09-14 (Etapa 4 cerrada ✅ — Lote B completo: items 035-038 integran la transferencia SFTP en `odin run`; suite 327 passed + 1 skipped)
 ---
 
 ## Resumen por Etapa
@@ -14,7 +14,7 @@
 | 1 | Fundaciones: paquete, CLI, configuración JSON y validación | 🚧 |
 | 2 | Respaldo Firebird con gbak | ✅ |
 | 3 | Compresión 7z | ✅ |
-| 4 | Transferencia SFTP con paramiko | 🚧 |
+| 4 | Transferencia SFTP con paramiko | ✅ |
 | 5 | Notificación por correo y flujo end-to-end one-shot | 🚧 |
 | 6 | Scheduler interno | 🚧 |
 | 7 | Modo servicio: Windows Service y daemon Linux | 🚧 |
@@ -88,23 +88,26 @@ Estado: 🚧
 
 ## Etapa 4 — Transferencia SFFTP con paramiko
 
-Estado: 🚧
+Estado: ✅
 
 ### Entregables
-- 🚧 `src/odin/transfer.py`: conexión paramiko con autenticación `password` y `key` (passphrase, `~` en ruta de clave)
-- 🚧 Política de host keys configurable (`strict` por defecto, `known_hosts`, `accept-new`, `insecure`)
-- 🚧 Creación recursiva de directorios remotos; upload + verificación de tamaño remoto vs. local
-- 🚧 Reintentos configurables con backoff; timeouts de conexión/operación
+- ✅ `src/odin/transfer.py`: conexión paramiko con autenticación `password` y `key` (passphrase, `~` en ruta de clave) (Items 030 y 033 ✅)
+- ✅ Política de host keys configurable (`strict` por defecto, `known_hosts`, `accept-new`, `insecure`) (Item 031 ✅)
+- ✅ Creación recursiva de directorios remotos; upload + verificación de tamaño remoto vs. local (Item 032 ✅)
+- ✅ Reintentos configurables con backoff; timeouts de conexión/operación (Item 033 ✅; parámetros por servidor cableados al parseo en el Item 035)
 - ✅ Aislamiento de fallos por servidor y `TransferResult` por destino (Item 034 ✅: `TransferExecutor.run_batch_transfer()` recorre todos los `ServerConfig` y devuelve un `TransferResult` por destino —estado, tamaño verificado, duración y error— aunque un servidor falle tras agotar los reintentos; reenvía a `SFTPTransfer` los reintentos/timeouts/backoff y la política de host keys de cada servidor, cierra la conexión siempre (`finally`) y detecta el origen ausente antes de conectar; 8 tests nuevos en `tests/test_transfer_executor.py`; correcciones de integración necesarias: el auth ya no se reintenta y se usa el `set_missing_host_key_policy` real de paramiko; suite 295 passed + 1 skipped en ~5 s)
-- 🚧 Pipeline extendido: respaldo → compresión → transferencia a todos los servidores
+- ✅ Pipeline extendido: respaldo → compresión → transferencia a todos los servidores (Item 035 ✅: `src/odin/pipeline.py` con `run_pipeline(config)` — ejecutores inyectables — y `PipelineResult` (`BatchBackupResult` fusionado + `transfers` por base); solo se transfieren las bases con respaldo+compresión verdes; `BackupResult.transfer_error_message` marca la base fallida conservando los datos de las fases previas; exit codes 0/3/4 incluyen la transferencia; cierre de integración 030/033: `_parse_server` cablea `sftp_retries`/timeouts/backoff con validación y `_Validator.float_field` nuevo; 12 tests nuevos (`tests/test_pipeline.py`, exit codes en `tests/test_cli.py`, parseo en `tests/test_config.py`); suite 307 passed + 1 skipped)
+- ✅ Reporte de transferencia en el resumen de `odin run` (Item 036 ✅: `BatchTransferResult` + `aggregate_transfer_results()` en `transfer.py`; `PipelineResult.transfers` expone el agregado por base — estructura lista para el correo de la Etapa 5 —; `_print_transfer_summary` con total de la fase y línea por servidor (OK con ruta remota/bytes/duración a stdout, FALLO con motivo a stderr) + agregado por base en el logger; README actualizado con la fase de transferencia y exit codes; 6 tests nuevos; suite 313 passed + 1 skipped)
+- ✅ Tests de integración y unitarios SFTP (Item 037 ✅: `tests/test_transfer_upload.py` — 7 tests de huecos de upload: reintento de `put` ante error de red, agotamiento de reintentos, verificación de tamaño fallida como test propio, auth por clave con passphrase, rechazo PPK, cierre idempotente —; `tests/test_transfer_integration.py` — 3 tests contra un sshd ephemeral in-process (`paramiko.Transport` servidor + `SFTPServerInterface` sobre `tmp_path`, sin binarios ni contenedores): upload+verificación real con auth por contraseña y por clave RSA, y auth fallida —; bloque de código muerto de `tests/test_transfer.py` extraído a `test_upload_integrity_failure`; suite 323 passed + 1 skipped en ~11 s)
 - ✅ `src/odin/transfer.py`: Implementación de reintentos y timeouts completada (Item 033)
+- ✅ Enmascarado de secretos en la transferencia (Item 038 ✅: el resumen impreso de `odin run` —stdout y stderr— pasa por `SecretMasker.from_config` (`mask=` en `_print_backup_summary`/`_print_transfer_summary`, tipo `MaskFn`), porque los `error_message` pueden contener secretos indirectos (p. ej. la ruta de la clave privada en una excepción); los logs ya estaban cubiertos por `MaskingFilter`; 3 tests en `tests/test_transfer_masking.py` verifican por ausencia + presencia de `***` sobre CLI real y `odin.log` real; suite 326 passed + 1 skipped)
 
 ### Criterios de aceptación
-- [ ] Demo: copia depositada y verificada en servidor SFTP de prueba con ambos métodos de autenticación
-- [ ] Servidor caído: reintentos agotados, error registrado, resto de servidores continúa
-- [ ] Host key desconocida falla con `strict` y se acepta con `accept-new` según config
-- [ ] Ningún log contiene contraseñas o contenido de claves
-- [ ] Tests con mock de paramiko (éxito, fallo de auth, reintentos, verificación) + integración opcional con sshd
+- [x] Demo: copia depositada y verificada en servidor SFTP de prueba con ambos métodos de autenticación — servidor de prueba = sshd ephemeral in-process (protocolo SSH/SFTP real sobre loopback, Items 037): upload + verificación de tamaño end-to-end con autenticación por contraseña (`test_transfer_upload_and_verify_against_ephemeral_sshd`) y por clave RSA (`test_transfer_with_private_key_authentication`)
+- [x] Servidor caído: reintentos agotados, error registrado, resto de servidores continúa — `tests/test_transfer_executor.py::test_retries_exhausted_before_continuing_with_next_server` (2 intentos al caído, el siguiente servidor sigue y completa) y aislamiento por base en `tests/test_pipeline.py`
+- [x] Host key desconocida falla con `strict` y se acepta con `accept-new` según config — políticas unit-testeadas (`RejectPolicy` por defecto, `AutoAddPolicy` en accept-new, `WarningPolicy` en insecure); el sshd ephemeral demuestra `accept-new` real aceptando una clave desconocida en el primer contacto
+- [x] Ningún log contiene contraseñas o contenido de claves — Item 038: tests de ausencia sobre `odin.log` real y sobre stdout/stderr de `odin run` con secretos inyectados en mensajes de error
+- [x] Tests con mock de paramiko (éxito, fallo de auth, reintentos, verificación) + integración opcional con sshd — Items 034 y 037: 21 tests de transferencia (unit + executor + upload) más 3 de integración contra sshd ephemeral
 
 ---
 
@@ -194,7 +197,7 @@ Estado: 🚧
 | F1. Respaldo Firebird 2.5 → 6 (gbak) | ✅ | 2 |
 | F2. Compresión 7z (nivel configurable, AES opcional) | 🚧 | 3 |
 | F3. Configuración JSON legible OS-agnóstica + validación | 🚧 | 1 |
-| F4. Transferencia SFTP con paramiko (reintentos, verificación) | 🚧 | 4 |
+| F4. Transferencia SFTP con paramiko (reintentos, verificación) | ✅ | 4 |
 | F5. Notificación por correo (siempre, sin secretos) | 🚧 | 5 |
 | F6. CLI y operación (`run`, `validate`, `service`, exit codes, logging) | 🚧 | 1, 5, 7 |
 | F7. Scheduler propio + modo servicio residente | 🚧 | 6, 7 |
@@ -206,7 +209,7 @@ Estado: 🚧
 |---|---|---|
 | G1. Respaldo confiable Firebird 2.5–6 | 🚧 | 2, 8 |
 | G2. Compresión 7z | 🚧 | 3 |
-| G3. Distribución SFTP con reintentos | 🚧 | 4 |
+| G3. Distribución SFTP con reintentos | ✅ | 4 |
 | G4. Correo de trazabilidad en cada ejecución | 🚧 | 5 |
 | G5. Instalación uniforme vía uv (Windows/Linux) | 🚧 | 1, 8 |
 | G6. Servicio residente con scheduler propio | 🚧 | 6, 7 |
@@ -237,9 +240,12 @@ Estado: 🚧
 
 ## Próximo Paso
 
-La **Etapa 4 está en curso**: el Item 034 (aislamiento de fallos por servidor
-y `TransferResult`) quedó completo y los items 030-033 tienen su implementación
-y tests en verde. Para continuar, en una **nueva sesión de chat** ejecutar
-`/speckit.aide.execute-batch 035-038` (Lote B: integración de la transferencia
-en `odin run`, reporte del resumen, tests de integración y verificación de
-enmascarado).
+La **Etapa 4 quedó cerrada** con el Lote B (items 035-038 ✅): `odin run`
+ejecuta el pipeline completo respaldo → compresión → transferencia, con
+reporte por servidor, tests unitarios + integración contra sshd ephemeral y
+enmascarado verificado de secretos. La queue 004 está agotada.
+
+Siguiente: en una **nueva sesión de chat** ejecutar `/speckit.aide.create-queue`
+para armar la `queue-005.md` de la **Etapa 5** (notificación por correo,
+informe de ejecución, flujo end-to-end one-shot y retención local, items a
+partir del 039).
