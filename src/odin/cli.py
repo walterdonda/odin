@@ -8,18 +8,21 @@ registra el resultado en consola y archivo con secretos enmascarados
 (``odin.log.setup_logging``, Item 004). Con ``--strict`` las advertencias
 también fallan (exit code 2), útil como gate de despliegue o de CI.
 
-Subcomando ``run``: ejecuta el respaldo (``odin.backup.BackupExecutor``) y la
-compresión 7z (``odin.compress.CompressionExecutor``) sobre todas las bases de
-la configuración, de forma secuencial y con aislamiento de fallos por base.
-Una base cuenta como exitosa solo si el respaldo y la compresión culminan bien
-(Item 025). El subcomando ``service`` (Etapas 6-7) aún no se registra; el punto
-de extensión queda documentado en ``build_parser``.
+Subcomando ``run``: ejecuta el pipeline completo (``odin.pipeline``, Item 035):
+respaldo (``odin.backup.BackupExecutor``), compresión 7z
+(``odin.compress.CompressionExecutor``) y transferencia SFTP
+(``odin.transfer.TransferExecutor``) sobre todas las bases de la
+configuración, de forma secuencial y con aislamiento de fallos por base y por
+servidor. Una base cuenta como exitosa solo si el respaldo, la compresión y
+la transferencia a todos los servidores culminan bien (Items 025 y 035). El
+subcomando ``service`` (Etapas 6-7) aún no se registra; el punto de extensión
+queda documentado en ``build_parser``.
 
 Convención de exit codes (constantes exportadas de este módulo):
 
 - ``EXIT_OK`` (0): operación exitosa (configuración válida, aunque tenga
-  advertencias salvo con ``--strict``; respaldo y compresión de todas las
-  bases exitosos).
+  advertencias salvo con ``--strict``; respaldo, compresión y transferencia
+  de todas las bases exitosos).
 - ``EXIT_INTERNAL`` (1): error interno inesperado (bug, fallo de I/O no
   controlado); se imprime mensaje + traceback en stderr sin morir con una
   excepción sin manejar.
@@ -27,11 +30,10 @@ Convención de exit codes (constantes exportadas de este módulo):
   JSON malformado, problema estructural o semántico, verificación de entorno
   fallida, falta la ruta de config) o de uso de la CLI (errores de argparse,
   p. ej. subcomando inexistente).
-- ``EXIT_PARTIAL`` (3): algunas bases completaron respaldo y compresión y
-  otras fallaron (en cualquiera de las dos fases).
-- ``EXIT_FAILURE`` (4): respaldo y compresión fallaron por completo (ninguna
-  base completó ambas fases; p. ej. gbak no encontrado o ``work_dir`` no
-  creable).
+- ``EXIT_PARTIAL`` (3): algunas bases completaron todas las fases y otras
+  fallaron (en cualquiera de las fases: respaldo, compresión o transferencia).
+- ``EXIT_FAILURE`` (4): el pipeline falló por completo (ninguna base completó
+  todas las fases; p. ej. gbak no encontrado o ``work_dir`` no creable).
 """
 
 from __future__ import annotations
@@ -40,15 +42,14 @@ import argparse
 import os
 import sys
 import traceback
-from collections.abc import Sequence
-from dataclasses import replace
+from collections.abc import Callable, Sequence
 from logging import Logger
 
 from odin import __version__
-from odin.backup import BackupExecutor, BackupResult, BatchBackupResult
-from odin.compress import BatchCompressionResult, CompressionExecutor
+from odin.backup import BatchBackupResult
 from odin.config import Config, ConfigError, load_config
-from odin.log import setup_logging
+from odin.log import SecretMasker, setup_logging
+from odin.pipeline import PipelineResult, run_pipeline
 from odin.validate import (
     Severity,
     ValidationReport,
@@ -75,6 +76,8 @@ EXIT_CONFIG = 2
 EXIT_PARTIAL = 3
 EXIT_FAILURE = 4
 ENV_CONFIG_VAR = "ODIN_CONFIG"
+
+MaskFn = Callable[[str], str]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -118,13 +121,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser = subparsers.add_parser(
         "run",
-        help="Ejecuta el respaldo (gbak) y la compresión 7z de las bases configuradas.",
+        help="Ejecuta el respaldo (gbak), la compresión 7z y la transferencia SFTP.",
         description=(
-            "Ejecuta el respaldo (gbak -b) y la compresión 7z de cada base de la "
-            "configuración, de forma secuencial y con aislamiento de fallos por base. "
-            "Los artefactos se guardan en local.work_dir como "
+            "Ejecuta el pipeline completo de cada base de la configuración: respaldo "
+            "(gbak -b), compresión 7z y transferencia SFTP del .fbk.7z a todos los "
+            "servidores configurados, de forma secuencial y con aislamiento de fallos "
+            "por base y por servidor. Los artefactos se guardan en local.work_dir como "
             "<nombre>_<timestamp>.fbk y su .fbk.7z. Una base cuenta como exitosa solo "
-            "si el respaldo y la compresión culminan bien (exit codes 0/3/4)."
+            "si el respaldo, la compresión y la transferencia culminan bien "
+            "(exit codes 0/3/4)."
         ),
     )
     run_parser.add_argument(
@@ -236,78 +241,36 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     return EXIT_OK if report.is_valid(strict=strict) else EXIT_CONFIG
 
 
-def _merge_compression_results(
-    batch: BatchBackupResult, compressed: BatchCompressionResult
-) -> BatchBackupResult:
-    """Cruza respaldo y compresión por base (Item 025).
-
-    Una base cuenta como exitosa solo si el respaldo y la compresión
-    culminaron bien: un fallo de compresión marca la base como fallida con
-    ``compression_error_message`` y conserva los datos del respaldo (ruta,
-    tamaño y duración) para el resumen.
-    """
-    by_name = {result.database_name: result for result in compressed.results}
-    merged: list[BackupResult] = []
-    for backup in batch.results:
-        compression = by_name.get(backup.database_name)
-        if not backup.success or backup.backup_path is None:
-            merged.append(backup)
-        elif compression is None:
-            merged.append(
-                replace(
-                    backup,
-                    success=False,
-                    compression_error_message="no se intentó la compresión del respaldo",
-                )
-            )
-        elif not compression.success:
-            merged.append(
-                replace(
-                    backup,
-                    success=False,
-                    compression_error_message=compression.error_message,
-                )
-            )
-        else:
-            merged.append(
-                replace(
-                    backup,
-                    archive_path=compression.archive_path,
-                    compressed_size_bytes=compression.compressed_size_bytes,
-                    compression_duration_seconds=compression.duration_seconds,
-                )
-            )
-    return replace(
-        batch,
-        results=merged,
-        success=bool(merged) and all(result.success for result in merged),
-        total_duration_seconds=batch.total_duration_seconds
-        + compressed.total_duration_seconds,
-    )
-
-
-def _print_backup_summary(batch: BatchBackupResult) -> None:
+def _print_backup_summary(batch: BatchBackupResult, *, mask: MaskFn | None = None) -> None:
     """Imprime el resumen del lote: totales a stdout, fallos a stderr.
 
     Por base exitosa informa ambas fases (Item 026): el ``.fbk`` con tamaño y
     duración del respaldo y el ``.fbk.7z`` con tamaño comprimido y duración de
-    la compresión. Los fallos distinguen respaldo y compresión.
+    la compresión. Los fallos distinguen respaldo y compresión. Con ``mask``
+    (Item 038) cada línea impresa pasa por el enmascarador de secretos de la
+    configuración, porque los mensajes de error pueden contener indirectamente
+    secretos (p. ej. la ruta de la clave privada dentro de una excepción).
     """
+    mask = mask or (lambda line: line)
     if batch.error_message is not None:
-        print(f"Respaldo no ejecutado: {batch.error_message}", file=sys.stderr)
+        print(mask(f"Respaldo no ejecutado: {batch.error_message}"), file=sys.stderr)
         return
     succeeded = sum(result.success for result in batch.results)
     print(
-        f"Respaldo y compresión finalizados: {succeeded}/{len(batch.results)} base(s) "
-        f"con éxito en {batch.total_duration_seconds:.1f} s."
+        mask(
+            f"Respaldo y compresión finalizados: {succeeded}/{len(batch.results)} base(s) "
+            f"con éxito en {batch.total_duration_seconds:.1f} s."
+        )
     )
     for result in batch.results:
         if result.success:
             print(
-                f"- OK    {result.database_name}: {result.backup_path} "
-                f"({result.file_size_bytes} bytes, {result.duration_seconds:.1f} s) → "
-                f"{result.archive_path} ({result.compressed_size_bytes} bytes, "
-                f"{result.compression_duration_seconds:.1f} s)"
+                mask(
+                    f"- OK    {result.database_name}: {result.backup_path} "
+                    f"({result.file_size_bytes} bytes, {result.duration_seconds:.1f} s) → "
+                    f"{result.archive_path} ({result.compressed_size_bytes} bytes, "
+                    f"{result.compression_duration_seconds:.1f} s)"
+                )
             )
         else:
             if result.compression_error_message is not None:
@@ -317,18 +280,72 @@ def _print_backup_summary(batch: BatchBackupResult) -> None:
                         f"; respaldo: {result.backup_path} "
                         f"({result.file_size_bytes} bytes, {result.duration_seconds:.1f} s)"
                     )
+            elif result.transfer_error_message is not None:
+                detail = f"transferencia fallida: {result.transfer_error_message}"
+                if result.archive_path is not None:
+                    detail += (
+                        f"; artefacto: {result.archive_path} "
+                        f"({result.compressed_size_bytes} bytes)"
+                    )
             else:
                 detail = result.error_message or "fallo sin detalle"
-            print(f"- FALLO {result.database_name}: {detail}", file=sys.stderr)
+            print(mask(f"- FALLO {result.database_name}: {detail}"), file=sys.stderr)
+
+
+def _print_transfer_summary(
+    pipeline: PipelineResult, *, mask: MaskFn | None = None
+) -> None:
+    """Imprime el detalle de la fase de transferencia (Item 036).
+
+    Por base transferida, una línea por servidor destino con ruta remota,
+    bytes verificados, duración y estado; los fallos van a stderr como en el
+    resumen de respaldo/compresión. Sin transferencias no imprime nada. Con
+    ``mask`` (Item 038) cada línea pasa por el enmascarador de secretos (los
+    ``error_message`` pueden contenerlos indirectamente).
+    """
+    mask = mask or (lambda line: line)
+    transfers = pipeline.transfers
+    if not transfers:
+        return
+    servers_total = sum(len(batch.results) for batch in transfers.values())
+    servers_ok = sum(
+        result.success for batch in transfers.values() for result in batch.results
+    )
+    total_duration = sum(batch.total_duration_seconds for batch in transfers.values())
+    print(
+        mask(
+            f"Transferencia SFTP: {servers_ok}/{servers_total} servidor(es) exitosos "
+            f"en {total_duration:.1f} s."
+        )
+    )
+    for database_name, batch in transfers.items():
+        for result in batch.results:
+            if result.success:
+                print(
+                    mask(
+                        f"- {database_name} → {result.server_name}: OK "
+                        f"{result.remote_path} ({result.transferred_bytes} bytes, "
+                        f"{result.duration_seconds:.1f} s)"
+                    )
+                )
+            else:
+                print(
+                    mask(
+                        f"- {database_name} → {result.server_name}: FALLO "
+                        f"({result.error_message or 'fallo sin detalle'})"
+                    ),
+                    file=sys.stderr,
+                )
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
-    """Ejecuta ``odin run``: respaldo (gbak) + compresión 7z por base.
+    """Ejecuta ``odin run``: respaldo (gbak) + compresión 7z + transferencia SFTP.
 
-    Exit codes: 0 si todas las bases completaron respaldo y compresión, 3 si
-    hubo una mezcla de éxitos y fallos (en cualquier fase), 4 si falló todo o
-    si no hay gbak disponible. Los errores de configuración (carga/parseo) son
-    2, igual que en ``validate``.
+    El pipeline completo (respaldo → compresión → transferencia, Item 035)
+    vive en ``odin.pipeline.run_pipeline``. Exit codes: 0 si todas las bases
+    completaron las tres fases, 3 si hubo una mezcla de éxitos y fallos (en
+    cualquier fase), 4 si falló todo o si no hay gbak disponible. Los errores
+    de configuración (carga/parseo) son 2, igual que en ``validate``.
     """
     source = _resolve_config_source(args)
     if source is None:
@@ -345,11 +362,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return EXIT_CONFIG
 
     logger = _setup_logging_or_warn(config)
-    executor = BackupExecutor(timeout=config.local.gbak_timeout_sec)
-    compressor = CompressionExecutor(
-        level=config.compression.level,
-        password=config.compression.password,
-    )
 
     if logger is not None:
         logger.info(
@@ -357,10 +369,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
             len(config.databases),
             config.local.work_dir,
         )
-    batch = executor.run_batch_backup(config.databases, config.local.work_dir)
-    compressed = compressor.run_batch_compression(batch.results)
-    batch = _merge_compression_results(batch, compressed)
-    _print_backup_summary(batch)
+    pipeline = run_pipeline(config)
+    batch = pipeline.backup
+    masker = SecretMasker.from_config(config)
+    _print_backup_summary(batch, mask=masker.mask)
+    _print_transfer_summary(pipeline, mask=masker.mask)
 
     succeeded = sum(result.success for result in batch.results)
     if logger is not None:
@@ -372,6 +385,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 succeeded,
                 len(batch.results),
                 batch.total_duration_seconds,
+            )
+        for database_name, transfer_batch in pipeline.transfers.items():
+            ok = sum(result.success for result in transfer_batch.results)
+            logger.info(
+                "Transferencia de '%s': %d/%d servidor(es) exitosos en %.1f s",
+                database_name,
+                ok,
+                len(transfer_batch.results),
+                transfer_batch.total_duration_seconds,
             )
     if batch.error_message is not None or not batch.results:
         return EXIT_FAILURE

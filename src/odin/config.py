@@ -426,6 +426,40 @@ class _Validator:
             return default
         return value
 
+    def float_field(
+        self,
+        raw: dict[str, Any],
+        key: str,
+        path: str,
+        *,
+        required: bool = True,
+        nullable: bool = False,
+        default: float | None = None,
+        minimum: float | None = None,
+        maximum: float | None = None,
+    ) -> float | None:
+        field_path = f"{path}.{key}"
+        if key not in raw:
+            if required:
+                self.add(field_path, "campo requerido ausente")
+            return default
+        value = raw[key]
+        if value is None:
+            if nullable:
+                return None
+            self.add(field_path, "no debe ser null")
+            return default
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            self.add(field_path, f"debe ser un número, se encontró {type(value).__name__}")
+            return default
+        if minimum is not None and value < minimum:
+            self.add(field_path, f"debe ser un número >= {minimum}, se encontró {value}")
+            return default
+        if maximum is not None and value > maximum:
+            self.add(field_path, f"debe ser un número <= {maximum}, se encontró {value}")
+            return default
+        return float(value)
+
     def bool_field(self, raw: dict[str, Any], key: str, path: str, *, default: bool) -> bool:
         field_path = f"{path}.{key}"
         if key not in raw:
@@ -552,7 +586,22 @@ def _parse_auth(v: _Validator, raw: dict[str, Any], path: str, base_dir: Path) -
     )
 
 
-_SERVER_FIELDS = frozenset({"name", "host", "port", "username", "auth", "remote_path", "host_key_policy", "sftp_retries", "sftp_connect_timeout_sec", "sftp_operation_timeout_sec"})
+_SERVER_FIELDS = frozenset(
+    {
+        "name",
+        "host",
+        "port",
+        "username",
+        "auth",
+        "remote_path",
+        "host_key_policy",
+        "sftp_retries",
+        "sftp_connect_timeout_sec",
+        "sftp_operation_timeout_sec",
+        "sftp_retry_backoff_base",
+        "sftp_retry_max_delay_sec",
+    }
+)
 
 
 def _parse_server(v: _Validator, raw: dict[str, Any], path: str, base_dir: Path) -> ServerConfig:
@@ -572,6 +621,29 @@ def _parse_server(v: _Validator, raw: dict[str, Any], path: str, base_dir: Path)
     host_key_policy = v.enum_field(
         raw, "host_key_policy", path, HostKeyPolicy, default=HostKeyPolicy.STRICT
     )
+    sftp_retries = v.int_field(raw, "sftp_retries", path, required=False, default=3, minimum=0)
+    if sftp_retries is None:
+        sftp_retries = 0
+    sftp_connect_timeout_sec = v.int_field(
+        raw, "sftp_connect_timeout_sec", path, required=False, default=30, minimum=1
+    )
+    if sftp_connect_timeout_sec is None:
+        sftp_connect_timeout_sec = 30
+    sftp_operation_timeout_sec = v.int_field(
+        raw, "sftp_operation_timeout_sec", path, required=False, default=60, minimum=1
+    )
+    if sftp_operation_timeout_sec is None:
+        sftp_operation_timeout_sec = 60
+    sftp_retry_backoff_base = v.float_field(
+        raw, "sftp_retry_backoff_base", path, required=False, default=2.0, minimum=0.0
+    )
+    if sftp_retry_backoff_base is None:
+        sftp_retry_backoff_base = 2.0
+    sftp_retry_max_delay_sec = v.float_field(
+        raw, "sftp_retry_max_delay_sec", path, required=False, default=30.0, minimum=0.0
+    )
+    if sftp_retry_max_delay_sec is None:
+        sftp_retry_max_delay_sec = 30.0
     return ServerConfig(
         name=name,
         host=host,
@@ -580,6 +652,11 @@ def _parse_server(v: _Validator, raw: dict[str, Any], path: str, base_dir: Path)
         auth=auth,
         remote_path=remote_path,
         host_key_policy=host_key_policy,
+        sftp_retries=sftp_retries,
+        sftp_connect_timeout_sec=sftp_connect_timeout_sec,
+        sftp_operation_timeout_sec=sftp_operation_timeout_sec,
+        sftp_retry_backoff_base=sftp_retry_backoff_base,
+        sftp_retry_max_delay_sec=sftp_retry_max_delay_sec,
     )
 
 

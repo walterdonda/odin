@@ -56,6 +56,31 @@ class TransferResult:
     error_message: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class BatchTransferResult:
+    """Resultado agregado de transferir un artefacto a un lote de servidores.
+
+    ``success`` es ``True`` solo si todos los destinos culminaron bien (vacuo
+    para un lote vacío, que el pipeline no produce porque sin servidores no
+    se transfiere). ``total_duration_seconds`` suma las duraciones
+    individuales: las transferencias son secuenciales, así que la suma
+    aproxima el tiempo de pared del lote sin medirlo aparte.
+    """
+
+    results: Sequence[TransferResult]
+    success: bool
+    total_duration_seconds: float
+
+
+def aggregate_transfer_results(results: Sequence[TransferResult]) -> BatchTransferResult:
+    """Agrega resultados individuales de transferencia en un ``BatchTransferResult``."""
+    return BatchTransferResult(
+        results=tuple(results),
+        success=all(result.success for result in results),
+        total_duration_seconds=sum(result.duration_seconds for result in results),
+    )
+
+
 class SFTPTransfer:
     """Conexión SFTP a un servidor con reintentos y backoff configurables."""
 

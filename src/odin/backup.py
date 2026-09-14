@@ -85,6 +85,7 @@ class BackupResult:
     compressed_size_bytes: int | None = None
     compression_duration_seconds: float = 0.0
     compression_error_message: str | None = None
+    transfer_error_message: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
