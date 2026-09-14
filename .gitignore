@@ -20,3 +20,6 @@ htmlcov/
 # Logs de ejecución (no versionar salidas de odin validate/run)
 *.log
 D:/
+
+#Opencode configs
+opencode.json
