@@ -122,19 +122,25 @@ falla no interrumpe a las siguientes:
    mide la duración y el ratio de compresión, reportándolo en los logs.
 5. Crea `local.work_dir` si no existe y guarda cada respaldo como
    `<nombre_bd>_<timestamp>.fbk` (timestamp `YYYYMMDD_HHMMSS`).
+6. **Transfiere cada `.fbk.7z` (Etapa 4)**: con paramiko, a todos los
+   `servers` configurados (SFTP con reintentos, timeouts y verificación de
+   tamaño por servidor). Solo se transfieren los artefactos con respaldo y
+   compresión exitosos; una base cuenta como exitosa únicamente si las tres
+   fases culminan bien. El resumen informa, por base y por servidor, la ruta
+   remota, los bytes verificados, la duración y el estado (OK/FALLO).
 
-La transferencia SFTP y el correo se sumarán al pipeline en las
-Etapas 3, 4 y 5; hoy `run` cubre solo el respaldo y la compresión.
+El correo (Etapa 5) se sumará al pipeline en una etapa posterior; hoy `run`
+cubre el respaldo, la compresión y la transferencia.
 
 ## Exit codes
 
 | Código | Significado |
 |---|---|
-| 0 | `validate`: configuración válida (puede tener advertencias) · `run`: todas las bases respaldadas |
+| 0 | `validate`: configuración válida (puede tener advertencias) · `run`: todas las bases completaron respaldo, compresión y transferencia |
 | 1 | Error interno inesperado |
 | 2 | Error de configuración, de uso de la CLI, o advertencias con `--strict` |
-| 3 | `run`: fallo parcial (algunas bases respaldadas y otras con error) |
-| 4 | `run`: fallo total (ninguna base respaldada) |
+| 3 | `run`: fallo parcial (algunas bases completaron todas las fases y otras fallaron en alguna) |
+| 4 | `run`: fallo total (ninguna base completó todas las fases) |
 
 Con `--strict` las advertencias también devuelven 2: útil como gate previo al
 despliegue o en CI.
