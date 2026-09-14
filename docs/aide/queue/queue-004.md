@@ -33,18 +33,18 @@ Implementar un ejecutor de transferencias que recorra la lista de servidores des
 
 > Items 035, 036, 037 y 038. Integración en el pipeline, actualización de reportes, tests y seguridad.
 >
-> **Comando:** `/speckit.})=035-038`
+> **Comando:** `/speckit.aide.execute-batch 035-038`
 
-### Item 035: Extensión del pipeline `odin run`: respaldo → compresión → transferencia
+### Item 035: Extensión del pipeline `odin run`: respaldo → compresión → transferencia (✅ Completado)
 Integrar la fase de transferencia en el orquestador `src/odin/pipeline.py`. El flujo debe ser: ejecutar respaldo (Etapa 2), comprimir (Etapa 3) y, si exitosos, transferir a todos los servidores configurados (Etapa 4). El éxito de la ejecución global dependerá de la culminación exitosa de todas las fases para cada base de datos.
 
-### Item 036: Integración de notificaciones y reporte de transferencia en el resumen
+### Item 036: Integración de notificaciones y reporte de transferencia en el resumen (✅ Completado)
 Actualizar el resumen de `odin run` y el logger para incluir información detallada sobre la fase de transferencia: rutas de archivos transferidos, tamaño, duración y estado por servidor destino. Asegurar que el `BatchTransferResult` se integre en el informe final que llegará por correo en la Etapa 5.
 
-### Item 037: Tests de integración y unitarios para la transferencia SFTP
+### Item 037: Tests de integración y unitarios para la transferencia SFTP (✅ Completado)
 Implementar una suite de tests que incluya mocks de `paramiko.SSHClient` y `paramiki.SFTPClient` para cubrir casos de éxito, fallo de autenticación, error de red (reintentos) y verificación de tamaño fallida. Incluir tests de integración opcionales contra un servidor `sshd` local o contenedor para validar el flujo real.
 
-### Item 038: Verificación de seguridad y enmascarado en la transferencia
+### Item 038: Verificación de seguridad y enmascarado en la transferencia (✅ Completado)
 Asegurar que ningún elemento de la configuración de los servidores (contrase<0xC2>ñas, rutas de claves privadas, passthrough de passphrase) aparezca en los logs de transferencia o en el reporte de salida. Validar que el enmascarado de secretos de la Etapa 1 se aplique correctamente a los nuevos campos de configuración de servidores de la Etapa 4.
 
 ---
