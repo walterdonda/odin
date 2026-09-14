@@ -429,3 +429,45 @@ def test_iter_secret_fields(tmp_path: Path) -> None:
     assert "config.servers[0].auth.private_key" in found
     assert found["config.notification.smtp.password"] == "smtp-secret"
     assert len(found) == 5
+
+
+def test_server_sftp_fields_parse_from_json(tmp_path: Path) -> None:
+    def extra(d: dict[str, Any]) -> None:
+        d["servers"][0].update(
+            sftp_retries=5,
+            sftp_connect_timeout_sec=11,
+            sftp_operation_timeout_sec=22,
+            sftp_retry_backoff_base=1.5,
+            sftp_retry_max_delay_sec=12.0,
+        )
+
+    config = _load(tmp_path, _mutate(extra))
+    server = config.servers[0]
+    assert server.sftp_retries == 5
+    assert server.sftp_connect_timeout_sec == 11
+    assert server.sftp_operation_timeout_sec == 22
+    assert server.sftp_retry_backoff_base == 1.5
+    assert server.sftp_retry_max_delay_sec == 12.0
+
+
+def test_server_sftp_fields_defaults(tmp_path: Path) -> None:
+    config = _load(tmp_path, _base_valid())
+    server = config.servers[0]
+    assert server.sftp_retries == 3
+    assert server.sftp_connect_timeout_sec == 30
+    assert server.sftp_operation_timeout_sec == 60
+    assert server.sftp_retry_backoff_base == 2.0
+    assert server.sftp_retry_max_delay_sec == 30.0
+
+
+def test_server_sftp_field_validation_errors(tmp_path: Path) -> None:
+    def bad(d: dict[str, Any]) -> None:
+        d["servers"][0]["sftp_retries"] = -1
+        d["servers"][0]["sftp_connect_timeout_sec"] = "lento"
+        d["servers"][0]["sftp_retry_backoff_base"] = True
+
+    problems = _problems(tmp_path, _mutate(bad))
+    paths = {p.field_path for p in problems}
+    assert "config.servers[0].sftp_retries" in paths
+    assert "config.servers[0].sftp_connect_timeout_sec" in paths
+    assert "config.servers[0].sftp_retry_backoff_base" in paths

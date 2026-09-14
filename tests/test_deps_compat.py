@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import sys
 import tomllib
+from importlib.metadata import version
+from importlib.util import find_spec
+
 import pytest
-from importlib.metadata import version, metadata
 
 with open("pyproject.toml", "rb") as f:
     pyprojecttoml = tomllib.load(f)
@@ -17,6 +19,7 @@ DEPENDENCIES_TO_CHECK = [
     "bcrypt",
     "cffi",
 ]
+
 
 @pytest.mark.parametrize("dep", DEPENDENCIES_TO_CHECK)
 def test_dependencies_import_and_version(dep: str) -> None:
@@ -37,45 +40,46 @@ def test_dependencies_import_and_version(dep: str) -> None:
         if clean_entry.split(">=")[0].split("==")[0].split(">")[0].strip() == dep:
             dep_entry = clean_entry
             break
-    
-            if dep_entry:
-                if ">=" in dep_entry:
-                    floor_str = dep_entry.split(">=")[1].split(" ")[0]
-                    current_version = version(dep)
-                    
-                    def parse_v(v_str: str) -> list[int]:
-                        return [int(x) for x in v_str.split(".") if x.isdigit()]
 
-                    v_parts = parse_v(current_version)
-                    f_parts = parse_v(floor_str[1:])
-                    
-                    for i in range(min(len(v_parts), len(f_parts))):
-                        if v_parts[i] > f_parts[i]:
-                            break
-                        if v_parts[i] < f_parts[i]:
-                            pytest.fail(f"Version mismatch for {dep}: installed {current_version}, required >= {floor_str}")
-                            break
-                    else:
-                        if len(v_parts) < len(f_parts):
-                            pytest.fail(f"Version mismatch for {dep}: installed {current_version}, required >= {floor_str}")
+    if dep_entry and ">=" in dep_entry:
+        floor_str = dep_entry.split(">=")[1].split(" ")[0]
+        current_version = version(dep)
+
+        def parse_v(v_str: str) -> list[int]:
+            return [int(x) for x in v_str.split(".") if x.isdigit()]
+
+        v_parts = parse_v(current_version)
+        f_parts = parse_v(floor_str)
+
+        for i in range(min(len(v_parts), len(f_parts))):
+            if v_parts[i] > f_parts[i]:
+                break
+            if v_parts[i] < f_parts[i]:
+                pytest.fail(
+                    f"Version mismatch for {dep}: installed {current_version}, "
+                    f"required >= {floor_str}"
+                )
+                break
+        else:
+            if len(v_parts) < len(f_parts):
+                pytest.fail(
+                    f"Version mismatch for {dep}: installed {current_version}, "
+                    f"required >= {floor_str}"
+                )
+
 
 def test_pywin32_behavior_on_linux() -> None:
-    """Verifica que pywin32 no falla en Linux (su ausencia es esperamente)."""
+    """Verifica que pywin32 no está importable en Linux (su ausencia es esperada)."""
     if sys.platform == "win32":
-        pytest.skip("pywin32 no disponible en Linux para test de import")
-    
-    try:
-        import win32serviceutil
-        pytest.fail("pywin32 no debería estar instalado/importable en Linux")
-    except ImportError:
-        pass 
+        pytest.skip("test de Linux: no aplica en Windows")
+    assert find_spec("win32serviceutil") is None
+
 
 def test_pywin32_wheels_in_lock() -> None:
     """Verificación estática de que el lock universal contiene wheels de pywin32 para 3.14."""
-    with open("uv.lock", "r", encoding="utf-8") as f:
+    with open("uv.lock", encoding="utf-8") as f:
         lock_content = f.read()
-    
+
     assert "pywin32-312-cp314-cp314-win32.whl" in lock_content
     assert "pywin32-312-cp314-cp314-win_amd64.whl" in lock_content
     assert "pywin32-312-cp314-cp314-win_arm64.whl" in lock_content
-

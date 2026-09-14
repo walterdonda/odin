@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import json
 import logging
+import posixpath
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,7 @@ from odin.cli import (
 )
 from odin.config import load_config
 from odin.log import LOG_FILENAME, LOGGER_NAME
+from odin.transfer import TransferResult
 
 FIXTURES = Path(__file__).parent / "fixtures"
 LINUX_FIXTURE = FIXTURES / "config_valid_linux.json"
@@ -431,7 +433,13 @@ def _install_fake_executor(
     monkeypatch: pytest.MonkeyPatch,
     builder: Callable[[list[Any], Path], BatchBackupResult],
 ) -> None:
-    """Reemplaza ``BackupExecutor`` en la CLI por un lote controlado."""
+    """Reemplaza ``BackupExecutor`` en la CLI por un lote controlado.
+
+    Desde el Item 035 la CLI delega en ``odin.pipeline.run_pipeline``, así
+    que el doble se instala en ``odin.pipeline``. El ``TransferExecutor``
+    también se dobla (éxito silencioso por servidor) para que los tests de
+    respaldo/compresión no intenten conexiones SFTP reales.
+    """
 
     class FakeBackupExecutor:
         def __init__(self, gbak_path: Any = None, timeout: Any = None) -> None:
@@ -441,7 +449,40 @@ def _install_fake_executor(
         def run_batch_backup(self, databases: list[Any], work_dir: Path) -> BatchBackupResult:
             return builder(databases, work_dir)
 
-    monkeypatch.setattr("odin.cli.BackupExecutor", FakeBackupExecutor)
+    monkeypatch.setattr("odin.pipeline.BackupExecutor", FakeBackupExecutor)
+    _install_fake_transfer(monkeypatch)
+
+
+def _install_fake_transfer(
+    monkeypatch: pytest.MonkeyPatch,
+    results: Callable[[Sequence[Any], Path], Sequence[TransferResult]] | None = None,
+) -> None:
+    """Reemplaza ``TransferExecutor`` en el pipeline por un doble controlable.
+
+    Sin ``results``, cada servidor devuelve un ``TransferResult`` exitoso con
+    el tamaño local verificado (el ``.fbk.7z`` real de los tests).
+    """
+
+    class FakeTransferExecutor:
+        def run_batch_transfer(
+            self, servers: Sequence[Any], local_path: Path
+        ) -> list[TransferResult]:
+            if results is not None:
+                return list(results(servers, local_path))
+            size = local_path.stat().st_size
+            return [
+                TransferResult(
+                    success=True,
+                    server_name=server.name,
+                    local_path=Path(local_path),
+                    remote_path=posixpath.join(server.remote_path, Path(local_path).name),
+                    transferred_bytes=size,
+                    duration_seconds=0.05,
+                )
+                for server in servers
+            ]
+
+    monkeypatch.setattr("odin.pipeline.TransferExecutor", FakeTransferExecutor)
 
 
 def _with_second_database(data: dict[str, Any]) -> None:
@@ -680,3 +721,141 @@ def test_run_help_lists_config_flag(capsys: pytest.CaptureFixture[str]) -> None:
         main(["run", "--help"])
     assert excinfo.value.code == 0
     assert "--config" in capsys.readouterr().out
+
+
+# --- run con transferencia (Item 035) ---
+
+
+def _install_failing_transfer(
+    monkeypatch: pytest.MonkeyPatch,
+    fail_for: Callable[[str], bool],
+) -> None:
+    """Transferencia doblada: falla los servidores de las bases indicadas."""
+
+    def results(servers: Sequence[Any], local_path: Path) -> Sequence[TransferResult]:
+        size = local_path.stat().st_size
+        fails = fail_for(local_path.stem.replace(".fbk", ""))
+        return [
+            TransferResult(
+                success=not fails,
+                server_name=server.name,
+                local_path=Path(local_path),
+                remote_path=posixpath.join(server.remote_path, Path(local_path).name),
+                transferred_bytes=None if fails else size,
+                duration_seconds=0.05,
+                error_message="Connection error: refused" if fails else None,
+            )
+            for server in servers
+        ]
+
+    _install_fake_transfer(monkeypatch, results)
+
+
+def test_run_transfer_failure_exits_4(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+
+    def builder(databases: list[Any], work_dir: Path) -> BatchBackupResult:
+        return BatchBackupResult(
+            results=[_result(db.name, True, work_dir) for db in databases],
+            success=True,
+            total_duration_seconds=0.1,
+        )
+
+    _install_fake_executor(monkeypatch, builder)
+    _install_failing_transfer(monkeypatch, lambda name: True)
+
+    assert main(["run", "--config", str(config_path)]) == EXIT_FAILURE
+    captured = capsys.readouterr()
+    assert "0/1 base(s) con éxito" in captured.out
+    assert "FALLO erp_principal" in captured.err
+    assert "transferencia fallida" in captured.err
+    assert "Connection error: refused" in captured.err
+
+
+def test_run_partial_transfer_failure_exits_3(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path, mutate=_with_second_database)
+
+    def builder(databases: list[Any], work_dir: Path) -> BatchBackupResult:
+        return BatchBackupResult(
+            results=[_result(db.name, True, work_dir) for db in databases],
+            success=True,
+            total_duration_seconds=0.1,
+        )
+
+    _install_fake_executor(monkeypatch, builder)
+    _install_failing_transfer(monkeypatch, lambda name: name == "erp_principal")
+
+    assert main(["run", "--config", str(config_path)]) == EXIT_PARTIAL
+    captured = capsys.readouterr()
+    assert "1/2 base(s) con éxito" in captured.out
+    assert "FALLO erp_principal" in captured.err
+    assert "OK    erp_secundaria" in captured.out
+
+
+def test_run_transfer_success_exits_0(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+
+    def builder(databases: list[Any], work_dir: Path) -> BatchBackupResult:
+        return BatchBackupResult(
+            results=[_result(db.name, True, work_dir) for db in databases],
+            success=True,
+            total_duration_seconds=0.1,
+        )
+
+    _install_fake_executor(monkeypatch, builder)
+    assert main(["run", "--config", str(config_path)]) == EXIT_OK
+    assert "1/1 base(s) con éxito" in capsys.readouterr().out
+
+
+def test_run_prints_transfer_summary_per_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+
+    def builder(databases: list[Any], work_dir: Path) -> BatchBackupResult:
+        return BatchBackupResult(
+            results=[_result(db.name, True, work_dir) for db in databases],
+            success=True,
+            total_duration_seconds=0.1,
+        )
+
+    _install_fake_executor(monkeypatch, builder)
+    assert main(["run", "--config", str(config_path)]) == EXIT_OK
+    captured = capsys.readouterr()
+    assert "Transferencia SFTP: 2/2 servidor(es) exitosos" in captured.out
+    assert (
+        "erp_principal → sitio-alterno-1: OK /backups/firebird/erp_principal.fbk.7z"
+        in captured.out
+    )
+    assert (
+        "erp_principal → sitio-alterno-2: OK /srv/backups/firebird/erp_principal.fbk.7z"
+        in captured.out
+    )
+    assert "bytes" in captured.out
+
+
+def test_run_prints_transfer_failures_on_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+
+    def builder(databases: list[Any], work_dir: Path) -> BatchBackupResult:
+        return BatchBackupResult(
+            results=[_result(db.name, True, work_dir) for db in databases],
+            success=True,
+            total_duration_seconds=0.1,
+        )
+
+    _install_fake_executor(monkeypatch, builder)
+    _install_failing_transfer(monkeypatch, lambda name: True)
+    assert main(["run", "--config", str(config_path)]) == EXIT_FAILURE
+    captured = capsys.readouterr()
+    assert "Transferencia SFTP: 0/2 servidor(es) exitosos" in captured.out
+    assert "erp_principal → sitio-alterno-1: FALLO (Connection error: refused)" in captured.err
+    assert "erp_principal → sitio-alterno-2: FALLO (Connection error: refused)" in captured.err

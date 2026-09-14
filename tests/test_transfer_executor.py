@@ -9,9 +9,11 @@ import pytest
 from odin.config import AuthMethod, HostKeyPolicy, ServerAuth, ServerConfig
 from odin.transfer import (
     AuthenticationError,
+    BatchTransferResult,
     ConnectionError,
     TransferExecutor,
     TransferResult,
+    aggregate_transfer_results,
 )
 
 
@@ -230,6 +232,59 @@ def test_empty_server_list_returns_empty_result(
     fake_transfer: type[FakeSFTPTransfer], artifact: Path
 ) -> None:
     assert TransferExecutor().run_batch_transfer([], artifact) == []
+
+
+def _ok(server: str, seconds: float = 0.5) -> TransferResult:
+    return TransferResult(
+        success=True,
+        server_name=server,
+        local_path=Path("/tmp/a.7z"),
+        remote_path=f"/backups/{server}/a.7z",
+        transferred_bytes=100,
+        duration_seconds=seconds,
+    )
+
+
+def _fail(server: str, seconds: float = 0.25) -> TransferResult:
+    return TransferResult(
+        success=False,
+        server_name=server,
+        local_path=Path("/tmp/a.7z"),
+        duration_seconds=seconds,
+        error_message="timeout",
+    )
+
+
+def test_aggregate_all_success() -> None:
+    batch = aggregate_transfer_results([_ok("uno", 0.5), _ok("dos", 0.7)])
+
+    assert isinstance(batch, BatchTransferResult)
+    assert batch.success is True
+    assert len(batch.results) == 2
+    assert batch.total_duration_seconds == pytest.approx(1.2)
+
+
+def test_aggregate_mixed_results_is_failure() -> None:
+    batch = aggregate_transfer_results([_ok("uno"), _fail("dos")])
+
+    assert batch.success is False
+    assert [result.server_name for result in batch.results] == ["uno", "dos"]
+    assert batch.results[1].error_message == "timeout"
+
+
+def test_aggregate_all_failures() -> None:
+    batch = aggregate_transfer_results([_fail("uno"), _fail("dos")])
+
+    assert batch.success is False
+    assert batch.total_duration_seconds == pytest.approx(0.5)
+
+
+def test_aggregate_empty_is_vacuously_successful() -> None:
+    batch = aggregate_transfer_results([])
+
+    assert batch.success is True
+    assert batch.results == ()
+    assert batch.total_duration_seconds == 0.0
 
 
 def test_retries_exhausted_before_continuing_with_next_server(

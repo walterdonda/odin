@@ -150,13 +150,15 @@ class TestSFTPTransfer(unittest.TestCase):
         if local_file.exists():
             local_file.unlink()
 
+    @patch("paramiko.SSHClient")
+    def test_upload_integrity_failure(self, mock_ssh_client):
         mock_client_instance = mock_ssh_client.return_value
         mock_sftp_instance = MagicMock()
         mock_client_instance.open_sftp.return_value = mock_sftp_instance
 
         # Mock stat for remote file with WRONG size
         mock_stat = MagicMock()
-        mock_stat.st_size = 50 # Wrong size
+        mock_stat.st_size = 50  # Wrong size
         mock_sftp_instance.stat.return_value = mock_stat
 
         self.transfer.connect()
