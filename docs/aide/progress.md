@@ -4,7 +4,7 @@
 
 **Leyenda:** 📋 Planificado · 🚧 En progreso · ✅ Completo · ⏸️ Diferido · ❌ Excluido
 
-**Última actualización:** 2026-09-15 (Etapa 5 ✅ cerrada — Lote D completo: items 047-048, test de integración con SMTP efímero in-process y documentación/cierre con los gates en verde; suite 410 passed + 2 skipped)
+**Última actualización:** 2026-09-15 (Etapa 6 - Lote A cerrado: items 049-051 ✅ — calendario/validación de cron, `SchedulerService` sobre APScheduler 3.11.3 y políticas `skip_if_running`/`on_misfire`; suite 438 passed + 2 skipped)
 ---
 
 ## Resumen por Etapa
@@ -136,9 +136,9 @@ Estado: ✅
 Estado: 🚧
 
 ### Entregables
-- 🚧 `src/odin/scheduler.py` sobre APScheduler (o stdlib si la evaluación lo recomienda)
-- 🚧 `schedule` tipo cron por job + `timezone` con validación
-- 🚧 Políticas `skip_if_running` y `on_misfire` (`run_once`/`skip`); jobs por subconjunto de bases
+- ✅ `src/odin/scheduler.py` sobre APScheduler (o stdlib si la evaluación lo recomienda) — Items 049-051 ✅: helpers de calendario `cron_trigger`/`next_fire_times` (Item 049) y `SchedulerService` sobre APScheduler 3.11.3 (Item 050: `BlockingScheduler` con la timezone global, un job por `jobs[]` con id `job-N`/`max_instances=1`/`replace_existing=True`, `start()`/`shutdown()` bloqueante e idempotente, `cycle_runner` inyectable `(Config, SchedulerJob) -> CycleOutcome` con excepción encapsulada y `last_outcomes`) más el registro in-flight `InFlightRegistry` y las políticas de misfire (Item 051); decisión 3.x vs 4.x vs stdlib documentada en el docstring del módulo
+- ✅ `schedule` tipo cron por job + `timezone` con validación — Item 049 ✅: `config._parse_job` valida la expresión con el mismo parser del scheduler (rango/sintaxis, `field_path` por job) y `_parse_scheduler` valida la `timezone` con `ZoneInfo` antes del trigger; `odin validate` reporta el próximo disparo de cada job en la timezone global (check `scheduler_next_fire`, WARNING si la expresión nunca dispara)
+- ✅ Políticas `skip_if_running` y `on_misfire` (`run_once`/`skip`); jobs por subconjunto de bases — Item 051 ✅: reserva atómica por base con `threading.Lock` (todo-o-nada o solo libres), liberación garantizada en `finally`, omisión logueada con motivo en `CycleOutcome` (`skipped`/`skipped_reason`), `run_once` ↔ `coalesce=True` + `misfire_grace_time=None` y `skip` ↔ grace acotado + guard de latencia con reloj inyectable; tests de solapamiento con `threading.Event`, ambos valores de `skip_if_running` y misfire con reloj falso
 - 🚧 Recarga de configuración en caliente con validación previa (config inválida no rompe el servicio)
 - 🚧 CLI: `odin service run` (foreground) y `odin service status` básico vía archivo de estado en `work_dir`
 - 🚧 Cada ciclo reutiliza el pipeline con notificación propia
@@ -241,15 +241,15 @@ Estado: 🚧
 
 ## Próximo Paso
 
-La **Etapa 5 quedó cerrada** (items 039-048 ✅): `odin run` ejecuta el ciclo
-one-shot completo —respaldo → compresión → transferencia → correo → retención
-local— con el informe por correo **siempre** (SMTP caído no crashea y degrada
-0 → 1), exit codes finales 0/1/3/4 y retención F8 que no altera el código de
-salida. Los criterios de aceptación se verificaron uno a uno con evidencia; el
-"correo recibido" se acredita con el servidor SMTP efímero in-process del Item
-047 (`tests/test_notify_integration.py`, sin dependencias externas). La suite
-completa queda en **410 passed + 2 skipped** (gbak real ausente en el host).
+La **Etapa 6 está en curso**: la `queue-006.md` está creada (items 049-058) y su
+**Lote A (items 049-051) quedó cerrado** — calendario validado con el mismo
+parser del scheduler, `SchedulerService` sobre APScheduler 3.11.3 y políticas
+`skip_if_running`/`on_misfire` con tests deterministas (reloj inyectable,
+`threading.Event`) y la suite en **438 passed + 2 skipped**.
 
-La `queue-005.md` quedó **agotada** (10/10 items). Siguiente: en una **nueva
-sesión de chat** ejecutar `/speckit.aide.create-queue` para generar el lote de
-la **Etapa 6 (scheduler interno)**, que arrancará en el item 049.
+Siguiente: en una **nueva sesión de chat** ejecutar
+`/speckit.aide.execute-batch 052-054` (Lote B de `queue-006.md`: estado en
+`work_dir`, CLI `odin service run|status` y el runner real del ciclo sobre
+`run_pipeline`). Después quedan el Lote C (055-056: recarga en caliente y test
+de integración con SMTP efímero) y el Lote D (057-058: demo en foreground y
+cierre de la Etapa 6).
