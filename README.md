@@ -40,8 +40,33 @@ uv run python scripts\verify.py --skip-sync --only pytest
 ```
 
 `--help` documenta los flags (`--skip-sync`, `--quick`, `--only <id>`; ids:
-`sync`, `pytest`, `ruff`, `mypy`, `validate-linux`, `validate-windows`). La
-CI (`.github/workflows/ci.yml`, Item 073) usará este mismo script como gate.
+`sync`, `pytest`, `ruff`, `mypy`, `validate-linux`, `validate-windows`).
+
+## Integración continua
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) corre el mismo gate en
+las dos plataformas objetivo, con jobs `linux` (`ubuntu-latest`) y `windows`
+(`windows-latest`):
+
+1. checkout + `astral-sh/setup-uv` con caché;
+2. `uv sync --locked` y `uv run python scripts/verify.py` como gate único
+   (`pytest` + `ruff` + `mypy` + `odin validate` de los dos ejemplos);
+3. `uv build` y el wheel publicado como artefacto de la corrida.
+
+El job `windows` suma el **ciclo de vida real del servicio** contra el SCM
+(los runners son administradores): `odin service install|start|status|stop|
+uninstall` con una configuración de scheduler y fases externas dobles
+(`gbak` *stub* y SMTP local, sin red externa), en el escenario gated
+`ODIN_WINDOWS_SERVICE_SMOKE=1` de
+`tests/test_service_windows_integration.py`. Fuera de Windows o sin la
+variable, ese test se salta: la suite local no lo necesita.
+
+El workflow **se activa al publicar el repositorio** (`push`/`pull_request`;
+hoy el repositorio no tiene remoto y no se ha ejecutado todavía), usa
+`permissions: contents: read` y no consume secretos. Hasta entonces, el gate
+local equivalente es `scripts/verify.py`; la persona que publique el repo
+debería confirmar la primera corrida del job `windows` (evidencia pendiente en
+[`docs/service.md` §9](docs/service.md#9-evidencia-de-verificación-item-074)).
 
 ## Compatibilidad de dependencias (Python 3.14)
 
@@ -61,7 +86,8 @@ Se ha verificado la compatibilidad de las dependencias principales con Python 3.
 - Se ha subido el floor de `pywin32` a `>=311` en `pyproject.toml` para reflejar el soporte real de wheels `cp314` en Python 3.14.
 - Se agregó `tzdata` como dependencia directa (Item 072): `zoneinfo` la necesita para `scheduler.timezone`/cron cuando el SO no trae la base IANA (contenedores Linux mínimos y Windows); con datos del SO actúa solo como fallback.
 - Se mantiene `requires-python >= 3.14`.
-- La confirmación runtime en Windows Server se realizará en el **Item 009**.
+- La confirmación runtime en Windows Server queda delegada al job `windows`
+  de la CI (Items 073/074; ver [`docs/service.md` §9](docs/service.md#9-evidencia-de-verificación-item-074)).
 
 *Nota: El test `tests/test_deps_compat.py` actúa como un invariante para prevenir regresiones en la compatibilidad.*
 
