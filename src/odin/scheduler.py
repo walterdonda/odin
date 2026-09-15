@@ -908,6 +908,7 @@ class SchedulerService:
         self._reload_requested = threading.Event()
         self._reload_lock = threading.Lock()
         self._reload_path = reload_request_path(config.local.work_dir)
+        self._shutdown_requested = threading.Event()
         self.last_outcomes: dict[str, CycleOutcome] = {}
         self._register_jobs()
         self._register_reload_watcher()
@@ -1241,7 +1242,14 @@ class SchedulerService:
         Un ciclo que falle no detiene el servicio: los errores se encapsulan en
         ``CycleOutcome`` (``run_job``). Con ``scheduler.jobs`` vacío el proceso
         queda a la espera sin disparar nada.
+
+        Si ya se pidió un ``shutdown()`` (Item 065: el gestor de servicios
+        puede detener justo cuando el proceso arranca) no se inicia: el
+        ``BlockingScheduler`` no tendría quién lo desbloquee.
         """
+        if self._shutdown_requested.is_set():
+            logger.info("Scheduler no arrancado: se pidió la parada antes de iniciar")
+            return
         logger.info(
             "Scheduler iniciado: %d job(s) en %s",
             len(self._jobs),
@@ -1253,7 +1261,14 @@ class SchedulerService:
             logger.info("Scheduler detenido")
 
     def shutdown(self, *, wait: bool = True) -> None:
-        """Detiene el scheduler; no falla si no estaba corriendo (idempotente)."""
+        """Detiene el scheduler; no falla si no estaba corriendo (idempotente).
+
+        La parada se marca **aunque el scheduler no haya arrancado todavía**
+        (Item 065): un ``stop()`` del gestor que llega antes que ``start()``
+        impide el arranque en vez de perderse, cerrando la carrera
+        arranque/parada sin depender del timing.
+        """
+        self._shutdown_requested.set()
         if not self._scheduler.running:
             return
         self._scheduler.shutdown(wait=wait)

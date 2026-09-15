@@ -21,10 +21,12 @@ log y en el resumen, y degrada el exit code 0 a 1. Después del correo corre la
 retención local (``odin.retention.RetentionExecutor``, Item 046): es una
 función secundaria cuyos errores se reportan pero no alteran el exit code.
 
-Subcomando ``service`` (Items 053, 055 y 062): ``run`` arranca el scheduler
-interno en primer plano (``odin.scheduler.SchedulerService``) con el estado
-consultable en ``local.work_dir/scheduler_state.json``; ``SIGINT``/``SIGTERM``
-detienen limpio (shutdown + estado final) con exit 0. ``status`` lee ese estado
+Subcomando ``service`` (Items 053, 055, 062 y 065): ``run`` arranca el scheduler
+interno en primer plano delegando en el runner compartido del modo servicio
+(``odin.service.runner.ServiceRunner``, el mismo que usan la unit systemd y el
+``SvcDoRun`` de Windows) con el estado consultable en
+``local.work_dir/scheduler_state.json``; ``SIGINT``/``SIGTERM`` detienen limpio
+(shutdown + estado final) con exit 0. ``status`` lee ese estado
 y presenta última ejecución, próximo disparo, salud y errores recientes; es una
 consulta: devuelve 0 mientras la lectura sea posible, con aviso si el proceso
 ya no corre o no hay estado. ``reload`` pide la recarga en caliente de la
@@ -71,14 +73,11 @@ import os
 import shutil
 import signal
 import sys
-import threading
 import traceback
-from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from logging import Logger
 from pathlib import Path
-from typing import Any
 
 from odin import __version__
 from odin.backup import BatchBackupResult
@@ -104,6 +103,7 @@ from odin.service import (
     create_service_manager,
     render_platform_status,
 )
+from odin.service.runner import ServiceRunner, build_scheduler_service
 from odin.validate import (
     Severity,
     ValidationReport,
@@ -712,148 +712,37 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return EXIT_FAILURE
 
 
-@contextmanager
-def _stop_signals() -> Iterator[None]:
-    """Instala ``SIGINT``/``SIGTERM`` para detener el servicio y restaura los previos.
-
-    El handler levanta ``KeyboardInterrupt`` en el hilo principal —donde el
-    ``BlockingScheduler`` está bloqueado— y ``_cmd_service_run`` lo traduce en
-    un shutdown limpio con exit 0. Fuera del hilo principal (uso embebido en
-    tests) no toca las señales globales, que solo el hilo principal puede
-    configurar; un SO que rechace el handler simplemente conserva el previo.
-    """
-    if threading.current_thread() is not threading.main_thread():
-        yield
-        return
-
-    def _raise_interrupt(signum: int, frame: Any) -> None:
-        raise KeyboardInterrupt
-
-    previous: dict[signal.Signals, Any] = {}
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            previous[sig] = signal.getsignal(sig)
-            signal.signal(sig, _raise_interrupt)
-        except (ValueError, OSError):
-            continue
-    try:
-        yield
-    finally:
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
-
-
-@contextmanager
-def _reload_signal(service: SchedulerService) -> Iterator[None]:
-    """Instala ``SIGUSR1`` para pedir la recarga en caliente (Item 055).
-
-    El handler solo llama a ``service.request_reload()`` (marca una bandera
-    thread-safe); el job ``reload-watcher`` del servicio procesa la recarga
-    fuera del contexto de la señal. En Windows (sin ``SIGUSR1``) o fuera del
-    hilo principal no se toca ninguna señal: la recarga llega por el archivo de
-    control. Al salir se restaura el handler previo.
-    """
-    if threading.current_thread() is not threading.main_thread():
-        yield
-        return
-    sig = getattr(signal, "SIGUSR1", None)
-    if sig is None:
-        yield
-        return
-
-    def _request_reload(signum: int, frame: Any) -> None:
-        service.request_reload()
-
-    try:
-        previous = signal.getsignal(sig)
-        signal.signal(sig, _request_reload)
-    except (ValueError, OSError):
-        yield
-        return
-    try:
-        yield
-    finally:
-        signal.signal(sig, previous)
-
-
 def _build_scheduler_service(
     config: Config, *, state_store: SchedulerStateStore
 ) -> SchedulerService:
-    """Fábrica real del servicio para ``odin service run`` (Items 053 y 055).
+    """Fábrica real del servicio para ``odin service run`` (Items 053 y 065).
 
-    Importa ``PipelineCycleRunner`` en forma diferida (la CLI con dobles no debe
-    depender de su construcción) y cablea el hook ``on_config_reloaded``: al
-    aplicar una recarga válida se re-ejecuta ``setup_logging`` (idempotente
-    desde el Item 004) para que el nivel y el enmascarado de secretos queden
-    vigentes; la máscara del estado la refresca el propio servicio.
+    Delega en ``odin.service.runner.build_scheduler_service`` con
+    ``console=True``: el modo residente usa la misma construcción con logging
+    sin consola. El runner comparte ``PipelineCycleRunner`` y el hook de recarga
+    que re-configura el logging (idempotente).
     """
-    from odin.scheduler import PipelineCycleRunner
-
-    def on_config_reloaded(new_config: Config) -> None:
-        _setup_logging_or_warn(new_config)
-
-    return SchedulerService(
-        config,
-        cycle_runner=PipelineCycleRunner(),
-        state_store=state_store,
-        on_config_reloaded=on_config_reloaded,
-    )
+    return build_scheduler_service(config, state_store=state_store, console=True)
 
 
 def _cmd_service_run(
     args: argparse.Namespace, *, service_factory: ServiceFactory | None = None
 ) -> int:
-    """Ejecuta ``odin service run``: scheduler en primer plano con estado.
+    """Ejecuta ``odin service run``: scheduler en primer plano (Items 053 y 065).
 
-    Items 053 y 055. Orden: carga de configuración (``scheduler.enabled: false``
-    es un error de configuración: el modo servicio no está habilitado), logging,
-    store del Item 052 y arranque bloqueante. El estado inicial se persiste
-    antes de arrancar y el final en el ``finally`` —también si ``start()`` falla
-    por una excepción imprevista, que ``main`` traduce a exit 1—.
-    ``SIGINT``/``SIGTERM`` (o un ``KeyboardInterrupt`` directo) paran el
-    servicio con exit 0; ``SIGUSR1`` (POSIX) pide la recarga en caliente.
-    ``service_factory`` es inyectable para tests; el default arma el servicio
-    real.
+    Delega en ``odin.service.runner.ServiceRunner`` con ``console=True``: el
+    runner carga y valida la configuración (``scheduler.enabled: false`` es un
+    error de configuración), configura el logging, persiste el estado del
+    Item 052 y arranca el scheduler bloqueante. ``SIGINT``/``SIGTERM`` (o un
+    ``KeyboardInterrupt`` directo) paran el servicio con exit 0; ``SIGUSR1``
+    (POSIX) pide la recarga en caliente. ``service_factory`` es inyectable para
+    tests; el default arma el servicio real.
     """
-    source = _resolve_config_source(args)
-    config = _load_config_or_report(source)
-    if config is None:
-        return EXIT_CONFIG
-    if not config.scheduler.enabled:
-        print(
-            "El scheduler está deshabilitado (scheduler.enabled: false): "
-            "habilítelo para usar 'odin service run'.",
-            file=sys.stderr,
-        )
-        return EXIT_CONFIG
-
-    logger = _setup_logging_or_warn(config)
-    store = SchedulerStateStore(
-        state_path(config.local.work_dir),
-        pid=os.getpid(),
-        config_path=str(config.config_path),
-        started_at=datetime.now(UTC),
-        mask=SecretMasker.from_config(config).mask,
-    )
-    factory = service_factory or _build_scheduler_service
-    service = factory(config, state_store=store)
-    store.save()
-    if logger is not None:
-        logger.info(
-            "Servicio en primer plano: %d job(s); estado en %s",
-            len(config.scheduler.jobs),
-            store.path,
-        )
-    try:
-        with _stop_signals(), _reload_signal(service):
-            service.start()
-    except KeyboardInterrupt:
-        if logger is not None:
-            logger.info("Señal de parada recibida: deteniendo el scheduler")
-    finally:
-        service.shutdown()
-        store.save()
-    return EXIT_OK
+    return ServiceRunner(
+        _resolve_config_source(args),
+        console=True,
+        service_factory=service_factory or _build_scheduler_service,
+    ).run()
 
 
 def _cmd_service_status(

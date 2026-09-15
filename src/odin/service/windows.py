@@ -122,8 +122,9 @@ def _import_win32() -> Win32Modules:
 def _build_runtime(config_path: Path) -> ServiceRuntime:
     """Factory real del runner compartido del servicio (Item 065, import diferido).
 
-    ``odin.service.runner`` llega en el Item 065; hasta entonces (y en tests) la
-    factory es inyectable a nivel de instancia del ``OdinWindowsService``.
+    Importa ``odin.service.runner`` en forma diferida para no cargar el runner
+    (ni apscheduler) al importar este módulo; la factory es inyectable a nivel
+    de instancia del ``OdinWindowsService`` para los tests.
     """
     module = importlib.import_module("odin.service.runner")
     factory = getattr(module, "ServiceRunner", None)

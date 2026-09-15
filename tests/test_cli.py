@@ -34,9 +34,7 @@ from odin.cli import (
     EXIT_INTERNAL,
     EXIT_OK,
     EXIT_PARTIAL,
-    _reload_signal,
     _service_executable,
-    _stop_signals,
     main,
 )
 from odin.config import Config, load_config
@@ -1330,16 +1328,6 @@ def test_service_run_internal_error_still_shuts_down_and_saves_state(
     assert "Error interno inesperado" in capsys.readouterr().err
 
 
-def test_stop_signals_installs_and_restores_handlers() -> None:
-    previous = signal.getsignal(signal.SIGTERM)
-    with _stop_signals():
-        handler = signal.getsignal(signal.SIGTERM)
-        assert handler is not previous
-        with pytest.raises(KeyboardInterrupt):
-            handler(signal.SIGTERM, None)
-    assert signal.getsignal(signal.SIGTERM) is previous
-
-
 def test_service_status_renders_running_state(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1390,16 +1378,6 @@ def test_service_status_missing_config_exits_2(
 
 
 HAS_SIGUSR1 = hasattr(signal, "SIGUSR1")
-
-
-class _FakeReloadService:
-    """Doble mínimo para el handler de SIGUSR1: cuenta solicitudes."""
-
-    def __init__(self) -> None:
-        self.reload_requests = 0
-
-    def request_reload(self) -> None:
-        self.reload_requests += 1
 
 
 def test_service_reload_without_running_service_reports_clear_message(
@@ -1469,19 +1447,6 @@ def test_service_reload_invalid_config_exits_2(
     config_path.write_text("{esto no es json", encoding="utf-8")
     assert main(["service", "reload", "--config", str(config_path)]) == EXIT_CONFIG
     assert "JSON malformado" in capsys.readouterr().err
-
-
-def test_reload_signal_requests_reload_and_restores_handler() -> None:
-    if not HAS_SIGUSR1:
-        pytest.skip("la plataforma no tiene SIGUSR1")
-    service = _FakeReloadService()
-    previous = signal.getsignal(signal.SIGUSR1)
-    with _reload_signal(service):  # type: ignore[arg-type]
-        handler = signal.getsignal(signal.SIGUSR1)
-        assert handler is not previous
-        handler(signal.SIGUSR1, None)
-    assert service.reload_requests == 1
-    assert signal.getsignal(signal.SIGUSR1) is previous
 
 
 # --- Item 062: service install|uninstall|start|stop ---

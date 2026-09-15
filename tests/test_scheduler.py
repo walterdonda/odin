@@ -259,6 +259,18 @@ def test_start_blocks_until_shutdown(
     assert "Scheduler detenido" in caplog.text
 
 
+def test_shutdown_before_start_prevents_start(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Un shutdown previo al arranque impide que start() bloquee (Item 065)."""
+    service = SchedulerService(_config(tmp_path), cycle_runner=FakeRunner())
+    service.shutdown()
+    with caplog.at_level(logging.INFO, logger="odin.scheduler"):
+        service.start()  # no bloquea: la parada pedida antes invalida el arranque
+    assert not service.scheduler.running
+    assert "no arrancado" in caplog.text
+
+
 # --- anti-solapamiento y misfire (Item 051) ---
 
 
