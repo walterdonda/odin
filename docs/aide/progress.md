@@ -4,7 +4,7 @@
 
 **Leyenda:** 📋 Planificado · 🚧 En progreso · ✅ Completo · ⏸️ Diferido · ❌ Excluido
 
-**Última actualización:** 2026-09-15 (Etapa 5 en curso — Lote A completo: items 039-042, núcleo de notificación (SMTP STARTTLS/SSL), render del informe y cola de log; suite 362 passed + 1 skipped)
+**Última actualización:** 2026-09-15 (Etapa 5 en curso — Lote B completo: items 043-044, correo integrado al pipeline (siempre, SMTP caído no crashea) y matriz final de exit codes 0/1/3/4 con resumen de correo enmascarado; suite 376 passed + 1 skipped)
 ---
 
 ## Resumen por Etapa
@@ -116,11 +116,11 @@ Estado: ✅
 Estado: 🚧
 
 ### Entregables
-- 🚧 `src/odin/notify.py`: SMTP con STARTTLS/SSL, autenticación, timeouts, destinatario `notification.to` (Item 039 ✅: `EmailNotifier`/`NotificationResult`/`ReportMessage` sobre `smtplib` con STARTTLS default, plano y SSL implícito `smtp.ssl` —mutuamente excluyente con `starttls` y validado en `config.py`—, timeout inline 30 s, errores operativos encapsulados sin propagación y sin credenciales; `validate` reporta el transporte y ya no advierte por `starttls: false` con SSL; ejemplos y README actualizados. Item 042 ✅: `tests/test_notify.py` con dobles de `smtplib.SMTP`/`SMTP_SSL` — 12 de transporte + 10 de render — y 3 tests de `smtp.ssl` en `tests/test_config.py`; 105 passed entre notify/config/log)
-- 🚧 Informe de ejecución: estado global (ÉXITO/PARCIAL/FALLO), por base y por servidor (tamaños, duración, errores); asunto con estado y hostname (Item 040 ✅: `render_report` puro sobre `PipelineResult`+`Config` con estado derivado del lote fusionado, detalle por base/destino, totales, cola de log opcional y enmascarado de asunto+cuerpo con `SecretMasker`; `now`/`hostname` inyectables. Item 041 ✅: `TailBufferHandler` + `capture_log_tail` en `log.py` con `deque(maxlen)`, enmascarado propio, `log_tail_lines == 0` desactivado y remoción garantizada; 11 tests nuevos en `tests/test_log.py`)
-- 🚧 `src/odin/pipeline.py`: flujo completo, correo **siempre**, SMTP caído no crashea (log + exit code)
+- ✅ `src/odin/notify.py`: SMTP con STARTTLS/SSL, autenticación, timeouts, destinatario `notification.to` (Item 039 ✅: `EmailNotifier`/`NotificationResult`/`ReportMessage` sobre `smtplib` con STARTTLS default, plano y SSL implícito `smtp.ssl` —mutuamente excluyente con `starttls` y validado en `config.py`—, timeout inline 30 s, errores operativos encapsulados sin propagación y sin credenciales; `validate` reporta el transporte y ya no advierte por `starttls: false` con SSL; ejemplos y README actualizados. Item 042 ✅: `tests/test_notify.py` con dobles de `smtplib.SMTP`/`SMTP_SSL` — 12 de transporte + 10 de render — y 3 tests de `smtp.ssl` en `tests/test_config.py`; 105 passed entre notify/config/log)
+- ✅ Informe de ejecución: estado global (ÉXITO/PARCIAL/FALLO), por base y por servidor (tamaños, duración, errores); asunto con estado y hostname (Item 040 ✅: `render_report` puro sobre `PipelineResult`+`Config` con estado derivado del lote fusionado, detalle por base/destino, totales, cola de log opcional y enmascarado de asunto+cuerpo con `SecretMasker`; `now`/`hostname` inyectables. Item 041 ✅: `TailBufferHandler` + `capture_log_tail` en `log.py` con `deque(maxlen)`, enmascarado propio, `log_tail_lines == 0` desactivado y remoción garantizada; 11 tests nuevos en `tests/test_log.py`. Item 043 ✅: el pipeline captura la cola durante las fases y la entrega al render)
+- ✅ `src/odin/pipeline.py`: flujo completo, correo **siempre**, SMTP caído no crashea (log + exit code) (Item 043 ✅: `run_pipeline` gana `notifier` inyectable (default `EmailNotifier.from_config`) y `PipelineResult.notification`; el informe se renderiza con la cola de `capture_log_tail` (`log_tail_lines` + `SecretMasker`) y se envía en todos los desenlaces —éxito, parcial, fallo total, lote no ejecutado y lote vacío—; `_send_report` convierte una excepción imprevista del notifier en `NotificationResult` fallido sin propagar; `_install_fake_executor`/`_install_fake_notifier` evitan SMTP real en la suite; 8 tests nuevos en `tests/test_pipeline.py`; ruff + mypy + 79 passed en pipeline/cli/notify)
 - 🚧 Retención local (F8): limpieza por `local.retention_days` solo de archivos gestionados por ODIN
-- 🚧 Exit codes: 0 éxito total, 3 parcial, 4 fallo total, 2 configuración, 1 interno
+- ✅ Exit codes: 0 éxito total, 3 parcial, 4 fallo total, 2 configuración, 1 interno (Item 044 ✅: matriz final con el correo —0 exige correo enviado; un SMTP caído en corrida por lo demás exitosa degrada 0 → 1; el 4 de lote no ejecutado/vacío tiene precedencia y el 3 se conserva aunque el correo falle—, línea de resumen "Correo enviado a X"/"Correo NO enviado: motivo" enmascarada, `run --description` y tabla del README actualizados; 6 tests nuevos de CLI, suite pipeline/cli/notify/config 127 passed)
 
 ### Criterios de aceptación
 - [ ] End-to-end real: `odin run` → correo recibido en la casilla de control con resumen completo
@@ -240,14 +240,17 @@ Estado: 🚧
 
 ## Próximo Paso
 
-El **Lote A de la Etapa 5** quedó cerrado (items 039-042 ✅): cliente SMTP
-(`src/odin/notify.py`) con STARTTLS/SSL implícito, render del informe de
-ejecución en texto plano con doble barrera de enmascarado y cola de log
-(`TailBufferHandler`), más 36 tests nuevos (22 en `tests/test_notify.py`, 11
-en `tests/test_log.py`, 3 en `tests/test_config.py`). La suite completa queda
-en 362 passed + 1 skipped (gbak real ausente en el host).
+El **Lote B de la Etapa 5** quedó cerrado (items 043-044 ✅): el correo entró
+al pipeline (`PipelineResult.notification`, notifier inyectable, cola de log
+capturada durante las fases y envío en todos los desenlaces —éxito, parcial,
+fallo total, lote no ejecutado y lote vacío—), y la matriz final de exit codes
+quedó cerrada (0 exige correo enviado; SMTP caído en corrida exitosa → 1; lote
+no ejecutado/vacío → 4 con precedencia), con línea "Correo enviado a X"/
+"Correo NO enviado: motivo" enmascarada y README actualizado. 14 tests nuevos
+(8 de pipeline, 6 de CLI). La suite completa queda en 376 passed + 1 skipped
+(gbak real ausente en el host).
 
 Siguiente: en una **nueva sesión de chat** ejecutar
-`/speckit.aide.execute-batch 043,044` para el **Lote B** de `queue-005.md`:
-integración del correo en `odin run` (siempre, SMTP caído no crashea) y cierre
-de la matriz de exit codes con el resumen de consola.
+`/speckit.aide.execute-batch 045,046` para el **Lote C** de `queue-005.md`:
+retención local (`src/odin/retention.py`, F8) e integración en el pipeline,
+reporte y actualización de `validate`.
