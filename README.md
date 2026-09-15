@@ -37,8 +37,9 @@ uv run pytest        # ejecuta la suite de tests
 uv run odin --version
 ```
 
-La documentación completa de instalación y operación llegará con el
-Item 009 del roadmap.
+El modo servicio residente tiene su guía operativa completa en
+[`docs/service.md`](docs/service.md); la verificación de instalación desde
+cero (`uv tool install`) en ambas plataformas llegará con la Etapa 8.
 
 ## Ejemplos de configuración
 
@@ -388,13 +389,49 @@ Por defecto se salta para no sumar ~2 minutos a la suite; los casos que sí
 corren por defecto (ciclos acortados en primer plano y parada limpia con
 SIGTERM) tardan segundos.
 
+## Modo servicio residente (Windows Service / daemon Linux)
+
+`odin service install` empaqueta el scheduler interno como **servicio del SO**:
+Windows Service (SCM) en Windows Server y unit **systemd** en Linux LTS. Es la
+vía para correr desatendido sin `cron` ni Task Scheduler; el pipeline, el
+estado y la recarga en caliente son los mismos del
+[scheduler interno](#scheduler-interno-y-modo-servicio-en-primer-plano).
+
+```bash
+# instala (exige --config/ODIN_CONFIG) y arranca
+sudo odin service install --config /etc/odin/config.json   # Linux (root)
+odin service install --config C:\odin\config.json          # Windows (consola elevada)
+odin service start
+odin service status        # gestor del SO + estado del scheduler
+odin service reload        # recarga la config sin reiniciar
+odin service stop
+odin service uninstall     # idempotente
+```
+
+| Aspecto | Linux (systemd) | Windows Server (SCM) |
+|---|---|---|
+| Gestor | unit `odin.service` (`deploy/odin.service` de referencia) | servicio `odin` sobre el host de pywin32 |
+| Permisos de instalación | root (o escritura en `/etc/systemd/system`); sin permisos imprime la guía | consola elevada (Administrador) |
+| Arranque automático | `systemctl enable` (`WantedBy=multi-user.target`) | `SERVICE_AUTO_START` |
+| Reinicio ante caída | `Restart=always` + `RestartSec=5` | failure actions del SCM (reinicio a los ~5 s, reset 24 h) |
+| Recarga en caliente | `odin service reload` → `SIGUSR1` | `odin service reload` → archivo de control |
+| Estado | `systemctl show` + `scheduler_state.json` | `QueryServiceStatus` + `scheduler_state.json` |
+| Log | `<resolved_log_dir>/odin.log`, solo archivo y rotado 5 MiB × 5 | ídem |
+
+La instalación **no arranca** el servicio (el arranque automático aplica en el
+próximo boot): después de `install`, usá `odin service start`. La guía
+operativa completa —cuenta del servicio y accesos, permisos del JSON, recarga,
+diagnóstico de fallos comunes, desinstalación limpia y el runbook de
+verificación en Windows Server real— está en
+[`docs/service.md`](docs/service.md).
+
 ## Exit codes
 
 | Código | Significado |
 |---|---|
-| 0 | `validate`: configuración válida (puede tener advertencias) · `run`: todas las bases completaron respaldo, compresión y transferencia **y** el correo se envió · `service run`: parada limpia por SIGINT/SIGTERM · `service status`: estado leído · `service reload`: solicitud entregada |
-| 1 | Error interno inesperado · `run`: el correo no se pudo enviar en una corrida por lo demás exitosa (una ejecución sin informe incumple la trazabilidad) · `service run`: fallo inesperado · `service reload`: no hay servicio en ejecución |
-| 2 | Error de configuración, de uso de la CLI, o advertencias con `--strict`; `service run`: `scheduler.enabled: false` o configuración inválida |
+| 0 | `validate`: configuración válida (puede tener advertencias) · `run`: todas las bases completaron respaldo, compresión y transferencia **y** el correo se envió · `service run`: parada limpia por SIGINT/SIGTERM · `service status`: estado leído · `service reload`: solicitud entregada · `service install\|uninstall\|start\|stop`: operación exitosa |
+| 1 | Error interno inesperado · `run`: el correo no se pudo enviar en una corrida por lo demás exitosa (una ejecución sin informe incumple la trazabilidad) · `service run`: fallo inesperado · `service reload`: no hay servicio en ejecución · `service install\|uninstall\|start\|stop`: fallo del gestor (incluida plataforma no soportada o servicio no instalado) |
+| 2 | Error de configuración, de uso de la CLI, o advertencias con `--strict`; `service run`: `scheduler.enabled: false` o configuración inválida; `service install`: falta la fuente de configuración o tiene errores; `service reload`: configuración ilegible |
 | 3 | `run`: fallo parcial (algunas bases completaron todas las fases y otras fallaron en alguna); el desenlace del correo no cambia este código |
 | 4 | `run`: fallo total (ninguna base completó todas las fases) o lote no ejecutado/vacío; tiene precedencia sobre el correo |
 
