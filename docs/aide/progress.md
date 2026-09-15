@@ -4,7 +4,7 @@
 
 **Leyenda:** 📋 Planificado · 🚧 En progreso · ✅ Completo · ⏸️ Diferido · ❌ Excluido
 
-**Última actualización:** 2026-09-15 (Etapa 6 - Lote A cerrado: items 049-051 ✅ — calendario/validación de cron, `SchedulerService` sobre APScheduler 3.11.3 y políticas `skip_if_running`/`on_misfire`; suite 438 passed + 2 skipped)
+**Última actualización:** 2026-09-15 (Etapa 6 - Lote B cerrado: items 052-054 ✅ — estado consultable en `work_dir/scheduler_state.json`, CLI `odin service run|status` y runner real del ciclo sobre `run_pipeline`; suite 475 passed + 2 skipped)
 ---
 
 ## Resumen por Etapa
@@ -140,8 +140,8 @@ Estado: 🚧
 - ✅ `schedule` tipo cron por job + `timezone` con validación — Item 049 ✅: `config._parse_job` valida la expresión con el mismo parser del scheduler (rango/sintaxis, `field_path` por job) y `_parse_scheduler` valida la `timezone` con `ZoneInfo` antes del trigger; `odin validate` reporta el próximo disparo de cada job en la timezone global (check `scheduler_next_fire`, WARNING si la expresión nunca dispara)
 - ✅ Políticas `skip_if_running` y `on_misfire` (`run_once`/`skip`); jobs por subconjunto de bases — Item 051 ✅: reserva atómica por base con `threading.Lock` (todo-o-nada o solo libres), liberación garantizada en `finally`, omisión logueada con motivo en `CycleOutcome` (`skipped`/`skipped_reason`), `run_once` ↔ `coalesce=True` + `misfire_grace_time=None` y `skip` ↔ grace acotado + guard de latencia con reloj inyectable; tests de solapamiento con `threading.Event`, ambos valores de `skip_if_running` y misfire con reloj falso
 - 🚧 Recarga de configuración en caliente con validación previa (config inválida no rompe el servicio)
-- 🚧 CLI: `odin service run` (foreground) y `odin service status` básico vía archivo de estado en `work_dir`
-- 🚧 Cada ciclo reutiliza el pipeline con notificación propia
+- ✅ CLI: `odin service run` (foreground) y `odin service status` básico vía archivo de estado en `work_dir` (Item 052 ✅: estado consultable `ServiceState`/`JobState`/`CycleRecord` + `SchedulerStateStore` en `scheduler.py` — escritura atómica `tempfile.mkstemp`+`os.replace` con limpieza del temporal, lectura tolerante `StateLoadResult` con `warning` (ausente/corrupto/esquema desconocido), vigencia por `os.kill(pid, 0)` —siempre viva en Windows—, máscara de secretos al registrar y `recent_errors` acotado; `CycleOutcome.status` (`CycleStatus`) derivado de `skipped`/`partial`/`success`; 14 tests en `tests/test_scheduler_state.py`. Item 053 ✅: subcomando `service` con `run`/`status` en `cli.py` — `run` exige `scheduler.enabled: true`, arranca `SchedulerService` en primer plano con estado persistido, `SIGINT`/`SIGTERM` vía `_stop_signals` → shutdown + estado final + exit 0 (config inválida → 2, error interno → 1); `status` lee `scheduler_state.json` y presenta en ejecución/detenido/sin estado, jobs, próximo disparo, último ciclo, salud y errores recientes; `SchedulerService` acepta `state_store` opcional y `_complete` persiste cada desenlace (éxito/fallo/omisión) con su próximo disparo; 112 passed en cli/scheduler/scheduler_state)
+- ✅ Cada ciclo reutiliza el pipeline con notificación propia (Item 054 ✅: `PipelineCycleRunner` en `scheduler.py` — filtra `config.databases` por las bases del job efectivo con la config del ciclo vía `dataclasses.replace` (la del servicio queda intacta), invoca `run_pipeline` con su correo y retención e inyecta `run`/opciones para tests e integración; traduce el resultado a `CycleOutcome` con estado global `CycleStatus` (éxito/parcial/fallo; prioridad del error de compresión > transferencia > respaldo), bases ejecutadas, duración y `notification_sent`; la excepción imprevista del pipeline la aísla el servicio y queda en `recent_errors`; secretos enmascarados en log y estado; 8 tests nuevos en `tests/test_scheduler.py`)
 
 ### Criterios de aceptación
 - [ ] Demo: proceso foreground ejecuta el flujo completo en horarios cortos y envía correo por ciclo
@@ -242,14 +242,14 @@ Estado: 🚧
 ## Próximo Paso
 
 La **Etapa 6 está en curso**: la `queue-006.md` está creada (items 049-058) y su
-**Lote A (items 049-051) quedó cerrado** — calendario validado con el mismo
-parser del scheduler, `SchedulerService` sobre APScheduler 3.11.3 y políticas
-`skip_if_running`/`on_misfire` con tests deterministas (reloj inyectable,
-`threading.Event`) y la suite en **438 passed + 2 skipped**.
+**Lote A (items 049-051) y Lote B (items 052-054) quedaron cerrados** — núcleo
+del scheduler, políticas `skip_if_running`/`on_misfire`, estado del servicio en
+`work_dir/scheduler_state.json`, CLI `odin service run|status` (señales →
+shutdown + estado final) y `PipelineCycleRunner` real sobre `run_pipeline` con
+correo propio por ciclo — con la suite en **475 passed + 2 skipped**.
 
 Siguiente: en una **nueva sesión de chat** ejecutar
-`/speckit.aide.execute-batch 052-054` (Lote B de `queue-006.md`: estado en
-`work_dir`, CLI `odin service run|status` y el runner real del ciclo sobre
-`run_pipeline`). Después quedan el Lote C (055-056: recarga en caliente y test
-de integración con SMTP efímero) y el Lote D (057-058: demo en foreground y
-cierre de la Etapa 6).
+`/speckit.aide.execute-batch 055,056` (Lote C de `queue-006.md`: recarga en
+caliente con validación previa y test de integración del scheduler con el
+catcher SMTP efímero). Después queda el Lote D (057-058: demo en foreground con
+cadencia real y cierre de la Etapa 6).
