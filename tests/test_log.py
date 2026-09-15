@@ -22,6 +22,10 @@ from odin.log import (
     MIN_SECRET_LENGTH,
     MaskingFilter,
     SecretMasker,
+    TailBufferHandler,
+    attach_tail_buffer,
+    capture_log_tail,
+    detach_tail_buffer,
     setup_logging,
 )
 
@@ -372,3 +376,111 @@ def test_setup_logging_no_log_files_outside_configured_dir(
     logger.info("verificación de ubicación")
     assert sorted(p.name for p in tmp_path.iterdir()) == ["config.json", "work"]
     assert (config.local.resolved_log_dir / LOG_FILENAME).is_file()
+
+
+# --- TailBufferHandler (Item 041) ---
+
+
+def test_tail_buffer_respects_maxlen_and_keeps_chronological_order(
+    odin_logger: logging.Logger,
+) -> None:
+    odin_logger.setLevel(logging.INFO)
+    with capture_log_tail(3) as tail:
+        for index in range(5):
+            odin_logger.info("linea %d", index)
+    assert len(tail.lines) == 3
+    assert [line.split("| ")[-1] for line in tail.lines] == ["linea 2", "linea 3", "linea 4"]
+
+
+def test_tail_buffer_does_not_retain_text_before_attach(odin_logger: logging.Logger) -> None:
+    odin_logger.setLevel(logging.INFO)
+    odin_logger.info("texto previo al attach")
+    with capture_log_tail(50) as tail:
+        odin_logger.info("texto capturado")
+    assert len(tail.lines) == 1
+    assert "texto capturado" in tail.lines[0]
+    assert all("previo al attach" not in line for line in tail.lines)
+
+
+def test_tail_buffer_uses_log_format(odin_logger: logging.Logger) -> None:
+    odin_logger.setLevel(logging.INFO)
+    with capture_log_tail(1) as tail:
+        odin_logger.info("con formato")
+    (line,) = tail.lines
+    assert "| INFO     | odin | con formato" in line
+    assert _TIMESTAMP_RE.search(line) is not None
+
+
+def test_tail_buffer_maxlen_zero_captures_nothing(odin_logger: logging.Logger) -> None:
+    odin_logger.setLevel(logging.INFO)
+    with capture_log_tail(0) as tail:
+        odin_logger.info("no debe capturarse")
+    assert tail.lines == ()
+    assert tail not in odin_logger.handlers
+
+
+def test_tail_buffer_masks_secrets_with_own_filter(odin_logger: logging.Logger) -> None:
+    odin_logger.setLevel(logging.INFO)
+    masker = SecretMasker(["masterkey", "smtp-secret"])
+    with capture_log_tail(50, masker) as tail:
+        odin_logger.info("db password=%s", "masterkey")
+        odin_logger.info("sin secreto")
+    captured = "\n".join(tail.lines)
+    assert "masterkey" not in captured
+    assert "***" in captured
+    assert "sin secreto" in captured
+
+
+def test_tail_buffer_clear_empties_without_detaching(odin_logger: logging.Logger) -> None:
+    odin_logger.setLevel(logging.INFO)
+    with capture_log_tail(10) as tail:
+        odin_logger.info("primera")
+        tail.clear()
+        assert tail.lines == ()
+        odin_logger.info("segunda")
+        assert len(tail.lines) == 1
+        assert "segunda" in tail.lines[0]
+
+
+def test_capture_log_tail_removes_handler_on_exit(odin_logger: logging.Logger) -> None:
+    before = list(odin_logger.handlers)
+    with capture_log_tail(10) as tail:
+        assert tail in odin_logger.handlers
+    assert odin_logger.handlers == before
+    assert tail not in odin_logger.handlers
+
+
+def test_capture_log_tail_removes_handler_on_exception(odin_logger: logging.Logger) -> None:
+    with pytest.raises(RuntimeError), capture_log_tail(10) as tail:
+        raise RuntimeError("boom")
+    assert tail not in odin_logger.handlers
+
+
+def test_attach_and_detach_tail_buffer_helpers(odin_logger: logging.Logger) -> None:
+    odin_logger.setLevel(logging.INFO)
+    handler = TailBufferHandler(10)
+    assert attach_tail_buffer(handler) is handler
+    assert handler in odin_logger.handlers
+    odin_logger.info("capturada por helper")
+    detach_tail_buffer(handler)
+    assert handler not in odin_logger.handlers
+    assert "capturada por helper" in handler.lines[0]
+
+
+def test_tail_buffer_with_setup_logging_does_not_leak_secrets(
+    tmp_path: Path,
+    odin_logger: logging.Logger,
+) -> None:
+    config = _load_fixture_config(tmp_path)
+    logger = setup_logging(config)
+    masker = SecretMasker.from_config(config)
+    with capture_log_tail(50, masker) as tail:
+        logger.info("conectando con password=%s", "masterkey")
+        logger.warning("clave smtp-secret en uso")
+    captured = "\n".join(tail.lines)
+    assert "masterkey" not in captured
+    assert "smtp-secret" not in captured
+    assert captured.count("***") >= 2
+    file_text = (config.local.resolved_log_dir / LOG_FILENAME).read_text(encoding="utf-8")
+    assert "masterkey" not in file_text
+    assert "smtp-secret" not in file_text

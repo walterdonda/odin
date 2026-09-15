@@ -76,6 +76,7 @@ confiabilidad/observabilidad, con sus valores por defecto:
 | `databases[]` | `gbak_timeout_sec` | `null` | Timeout por base; si es `null`, usa `local.gbak_timeout_sec`. |
 | `servers[]` | `host_key_policy` | `"strict"` | Política de host keys SSH: `strict`, `known_hosts`, `accept-new`, `insecure`. |
 | `notification` | `log_tail_lines` | `50` | Líneas finales del log adjuntas al correo de ejecución. |
+| `notification.smtp` | `ssl` | `false` | SSL implícito (típicamente puerto 465); exige `starttls: false`. |
 | `local` | `log_level` | `"INFO"` | Nivel de logging: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
 | `local` | `log_dir` | `null` | Directorio de logs; si es `null`, se usa `<work_dir>/logs`. |
 | `local` | `min_free_mb` | `1024` | Espacio libre mínimo exigido en `work_dir` antes de respaldar. |

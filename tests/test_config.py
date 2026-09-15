@@ -298,6 +298,32 @@ def test_email_format(tmp_path: Path) -> None:
     assert any(p.field_path == "config.notification.to" for p in problems)
 
 
+def test_smtp_ssl_defaults_false(tmp_path: Path) -> None:
+    config = _load(tmp_path, _base_valid())
+    assert config.notification.smtp.ssl is False
+    assert config.notification.smtp.starttls is True
+
+
+def test_smtp_ssl_without_starttls_parses(tmp_path: Path) -> None:
+    def implicit_ssl(d: dict[str, Any]) -> None:
+        d["notification"]["smtp"].update({"starttls": False, "ssl": True})
+
+    config = _load(tmp_path, _mutate(implicit_ssl))
+    assert config.notification.smtp.ssl is True
+    assert config.notification.smtp.starttls is False
+
+
+def test_smtp_ssl_mutually_exclusive_with_starttls(tmp_path: Path) -> None:
+    def both(d: dict[str, Any]) -> None:
+        d["notification"]["smtp"]["ssl"] = True
+
+    problems = _problems(tmp_path, _mutate(both))
+    assert any(
+        p.field_path == "config.notification.smtp.ssl" and "starttls" in p.message
+        for p in problems
+    )
+
+
 def test_timezone_validated(tmp_path: Path) -> None:
     def bad(d: dict[str, Any]) -> None:
         d["scheduler"]["timezone"] = "Marte/Olympus_Mons"

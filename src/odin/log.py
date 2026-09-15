@@ -18,7 +18,16 @@ Enmascarado (visión §6 Seguridad): ``SecretMasker`` es una utilidad pura
 reemplaza por ``***`` cada secreto no vacío de
 ``Config.iter_secret_fields()`` y vacía el cuerpo de bloques PEM
 ``PRIVATE KEY`` aunque su contenido no esté listado. Está pensada para
-reutilizarse en los correos de ejecución de la Etapa 5.
+reutilizarse en los correos de ejecución de la Etapa 5 (implementado en
+``odin.notify``).
+
+Cola de log del informe (Item 041): ``TailBufferHandler`` captura las últimas
+``notification.log_tail_lines`` líneas ya formateadas en un
+``deque(maxlen=N)``, aplicando el ``MaskingFilter`` con el ``SecretMasker``
+de la configuración como barrera propia (independiente del orden de handlers
+del logger). ``capture_log_tail`` es el context manager recomendado para
+adjuntarlo/removerlo del logger ``odin`` alrededor de una corrida;
+``notification.log_tail_lines == 0`` desactiva la captura.
 
 Política de secretos cortos: los literales con menos de
 ``MIN_SECRET_LENGTH`` (4) caracteres se ignoran. Enmascarar literales de
@@ -31,7 +40,9 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Iterable, Mapping
+from collections import deque
+from collections.abc import Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from logging.handlers import RotatingFileHandler
 
 from odin.config import Config, LogLevel
@@ -49,6 +60,10 @@ __all__ = [
     "MIN_SECRET_LENGTH",
     "MaskingFilter",
     "SecretMasker",
+    "TailBufferHandler",
+    "attach_tail_buffer",
+    "capture_log_tail",
+    "detach_tail_buffer",
     "setup_logging",
 ]
 
@@ -171,3 +186,78 @@ def setup_logging(config: Config) -> logging.Logger:
     logger.addHandler(file_handler)
     logger.addHandler(stream_handler)
     return logger
+
+
+class TailBufferHandler(logging.Handler):
+    """Captura en memoria las últimas ``maxlen`` líneas de log formateadas.
+
+    Pensado para adjuntar el tramo final del log al correo de ejecución
+    (Item 041): el ``deque(maxlen)`` retiene solo lo reciente y descarta lo
+    más antiguo sin crecimiento de memoria. Con ``masker`` se agrega un
+    ``MaskingFilter`` propio para que el buffer nunca conserve secretos,
+    aunque el handler se evalúe antes que los handlers enmascaradores del
+    logger. ``maxlen == 0`` desactiva la captura (el deque no retiene nada).
+    """
+
+    def __init__(self, maxlen: int, masker: SecretMasker | None = None) -> None:
+        super().__init__()
+        self._lines: deque[str] = deque(maxlen=max(0, maxlen))
+        self.setFormatter(logging.Formatter(LOG_FORMAT))
+        if masker is not None:
+            self.addFilter(MaskingFilter(masker))
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Formatea el record y lo agrega al buffer (descarta el más antiguo)."""
+        try:
+            self._lines.append(self.format(record))
+        except Exception:
+            self.handleError(record)
+
+    @property
+    def lines(self) -> tuple[str, ...]:
+        """Líneas capturadas en orden cronológico (la más reciente al final)."""
+        return tuple(self._lines)
+
+    def clear(self) -> None:
+        """Vacía el buffer sin desadjuntar el handler."""
+        self._lines.clear()
+
+
+def _resolve_target(target: logging.Logger | None) -> logging.Logger:
+    """Logger objetivo de la captura: el indicado o el logger ``odin``."""
+    return target if target is not None else logging.getLogger(LOGGER_NAME)
+
+
+def attach_tail_buffer(
+    handler: TailBufferHandler, target: logging.Logger | None = None
+) -> TailBufferHandler:
+    """Adjunta ``handler`` al logger ``odin`` (o al indicado) y lo devuelve."""
+    _resolve_target(target).addHandler(handler)
+    return handler
+
+
+def detach_tail_buffer(handler: TailBufferHandler, target: logging.Logger | None = None) -> None:
+    """Remueve ``handler`` del logger ``odin`` (o del indicado)."""
+    _resolve_target(target).removeHandler(handler)
+
+
+@contextmanager
+def capture_log_tail(
+    maxlen: int, masker: SecretMasker | None = None, *, target: logging.Logger | None = None
+) -> Iterator[TailBufferHandler]:
+    """Captura la cola del log durante el bloque y remueve el handler al salir.
+
+    Con ``maxlen <= 0`` no adjunta nada y devuelve un buffer vacío (la captura
+    queda deshabilitada, ``notification.log_tail_lines == 0``). La remoción
+    está en ``finally``: una excepción dentro del bloque no deja el handler
+    colgado en el logger.
+    """
+    handler = TailBufferHandler(maxlen, masker)
+    if maxlen > 0:
+        attach_tail_buffer(handler, target)
+    try:
+        yield handler
+    finally:
+        if maxlen > 0:
+            detach_tail_buffer(handler, target)
+        handler.close()

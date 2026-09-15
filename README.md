@@ -55,6 +55,11 @@ explica cómo adaptarlos, las recomendaciones de seguridad (permisos `600`/ACL,
 no versionar el JSON real) y los campos opcionales con sus valores por
 defecto. Validá tu configuración con `odin validate` antes de ejecutar.
 
+El bloque `notification.smtp` define el transporte del informe: `starttls: true`
+(default) negocia STARTTLS; `starttls: false` envía en plano (relays locales); y
+`smtp.ssl: true` usa SSL implícito (típicamente puerto 465) y es mutuamente
+excluyente con `starttls: true`.
+
 ## Validación de configuración
 
 ```bash
@@ -75,7 +80,8 @@ uv run odin validate --config ruta/al/config.json --strict
    `local.min_free_mb`.
 3. **Coherencia operativa**: scheduler habilitado sin jobs, bases no cubiertas
    por ningún job, ausencia de destinos SFTP, `host_key_policy: insecure`,
-   `starttls: false`, retención desactivada.
+   `starttls: false` sin `smtp.ssl` (canal SMTP sin cifrar), retención
+   desactivada.
 
 La salida agrupa los hallazgos en `ERRORES`, `ADVERTENCIAS` y `VERIFICACIONES`,
 cada uno con la ruta del campo implicado (p. ej. `config.servers[1].auth.private_key`).

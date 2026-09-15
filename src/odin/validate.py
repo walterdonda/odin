@@ -576,13 +576,14 @@ def _check_servers(report: ValidationReport, config: Config) -> None:
 def _check_notification(report: ValidationReport, config: Config) -> None:
     notification = config.notification
     smtp = notification.smtp
+    transport = "SSL implícito" if smtp.ssl else ("STARTTLS" if smtp.starttls else "sin cifrar")
     report.add(
         Severity.OK,
         f"{_ROOT}.notification.to",
-        f"informe de ejecución a {notification.to} vía {smtp.host}:{smtp.port}",
+        f"informe de ejecución a {notification.to} vía {smtp.host}:{smtp.port} ({transport})",
         check="notification_target",
     )
-    if not smtp.starttls:
+    if not smtp.starttls and not smtp.ssl:
         report.add(
             Severity.WARNING,
             f"{_ROOT}.notification.smtp.starttls",

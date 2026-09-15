@@ -150,11 +150,16 @@ class ServerConfig:
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class SmtpConfig:
-    """Servidor SMTP para la notificación por correo."""
+    """Servidor SMTP para la notificación por correo.
+
+    ``starttls`` (default) y ``ssl`` son mutuamente excluyentes: ``ssl`` usa
+    SSL implícito (típicamente puerto 465) y exige ``starttls: false``.
+    """
 
     host: str
     port: int
     starttls: bool = True
+    ssl: bool = False
     username: str = ""
     password: str = ""
 
@@ -660,7 +665,7 @@ def _parse_server(v: _Validator, raw: dict[str, Any], path: str, base_dir: Path)
     )
 
 
-_SMTP_FIELDS = frozenset({"host", "port", "starttls", "username", "password"})
+_SMTP_FIELDS = frozenset({"host", "port", "starttls", "ssl", "username", "password"})
 
 
 def _parse_smtp(v: _Validator, raw: dict[str, Any], path: str) -> SmtpConfig:
@@ -668,9 +673,23 @@ def _parse_smtp(v: _Validator, raw: dict[str, Any], path: str) -> SmtpConfig:
     host = v.str_field(raw, "host", path) or ""
     port = v.int_field(raw, "port", path, minimum=1, maximum=65535) or 0
     starttls = v.bool_field(raw, "starttls", path, default=True)
+    ssl_enabled = v.bool_field(raw, "ssl", path, default=False)
+    if starttls and ssl_enabled:
+        v.add(
+            f"{path}.ssl",
+            "es mutuamente excluyente con 'starttls: true' "
+            "(use 'starttls': false para SSL implícito, p. ej. puerto 465)",
+        )
     username = v.str_field(raw, "username", path) or ""
     password = v.str_field(raw, "password", path) or ""
-    return SmtpConfig(host=host, port=port, starttls=starttls, username=username, password=password)
+    return SmtpConfig(
+        host=host,
+        port=port,
+        starttls=starttls,
+        ssl=ssl_enabled,
+        username=username,
+        password=password,
+    )
 
 
 _NOTIFICATION_FIELDS = frozenset({"to", "from", "smtp", "log_tail_lines"})
