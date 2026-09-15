@@ -25,6 +25,7 @@ dependencies = [
     "py7zr>=1.0",
     "apscheduler>=3.11",
     "pywin32>=311; sys_platform == 'win32'",
+    "tzdata>=2026.3",
 ]
 
 [dependency-groups]
