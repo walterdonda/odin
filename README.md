@@ -134,19 +134,28 @@ falla no interrumpe a las siguientes:
    compresión exitosos; una base cuenta como exitosa únicamente si las tres
    fases culminan bien. El resumen informa, por base y por servidor, la ruta
    remota, los bytes verificados, la duración y el estado (OK/FALLO).
+7. **Envía el informe por correo (Etapa 5)**: con la sección `notification`
+   (`smtp`, `to`, `from`, `log_tail_lines`) envía **siempre** el resumen de la
+   ejecución a la casilla de control: estado global ÉXITO/PARCIAL/FALLO,
+   detalle por base (tamaños, duración y error de la fase que falló), detalle
+   por servidor destino y las últimas líneas del log. El correo es solo texto:
+   nunca adjunta el backup ni incluye credenciales (doble enmascarado). Un
+   SMTP caído no rompe la corrida: el motivo queda en el log y en el resumen,
+   y el exit code pasa de 0 a 1.
 
-El correo (Etapa 5) se sumará al pipeline en una etapa posterior; hoy `run`
-cubre el respaldo, la compresión y la transferencia.
+El correo se envía también cuando el respaldo falla o el lote no se ejecutó;
+si el servidor SMTP no responde, `odin run` termina con un error registrado
+(exit code 1 en una corrida por lo demás exitosa) en lugar de crashear.
 
 ## Exit codes
 
 | Código | Significado |
 |---|---|
-| 0 | `validate`: configuración válida (puede tener advertencias) · `run`: todas las bases completaron respaldo, compresión y transferencia |
-| 1 | Error interno inesperado |
+| 0 | `validate`: configuración válida (puede tener advertencias) · `run`: todas las bases completaron respaldo, compresión y transferencia **y** el correo se envió |
+| 1 | Error interno inesperado · `run`: el correo no se pudo enviar en una corrida por lo demás exitosa (una ejecución sin informe incumple la trazabilidad) |
 | 2 | Error de configuración, de uso de la CLI, o advertencias con `--strict` |
-| 3 | `run`: fallo parcial (algunas bases completaron todas las fases y otras fallaron en alguna) |
-| 4 | `run`: fallo total (ninguna base completó todas las fases) |
+| 3 | `run`: fallo parcial (algunas bases completaron todas las fases y otras fallaron en alguna); el desenlace del correo no cambia este código |
+| 4 | `run`: fallo total (ninguna base completó todas las fases) o lote no ejecutado/vacío; tiene precedencia sobre el correo |
 
 Con `--strict` las advertencias también devuelven 2: útil como gate previo al
 despliegue o en CI.
