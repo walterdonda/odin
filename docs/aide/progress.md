@@ -4,7 +4,7 @@
 
 **Leyenda:** 📋 Planificado · 🚧 En progreso · ✅ Completo · ⏸️ Diferido · ❌ Excluido
 
-**Última actualización:** 2026-09-15 (Etapa 7 🚧 - Lote A cerrado: items 059-061 — subpaquete `src/odin/service/` con el contrato portable y despacho por plataforma, gestor Linux sobre systemd con `deploy/odin.service` (guía sin permisos e `install/uninstall` idempotentes) y gestor Windows sobre pywin32 con arranque automático, reinicio ante caída y shutdown limpio; la CLI `install|uninstall|start|stop`, el `status` compuesto y la documentación quedan en los lotes B-D de `queue-007.md`; gates 568 passed + 3 skipped + ruff + mypy Success 18 files)
+**Última actualización:** 2026-09-15 (Etapa 7 🚧 - Lote B cerrado: items 062-064 — CLI `odin service install|uninstall|start|stop` con validación previa y guía sin permisos, `odin service status` compuesto (gestor del SO + scheduler) y logging del modo residente sin consola (`console=False` + `redirect_stdio_to_log`); los lotes C-D de `queue-007.md` (runner compartido, integración de la unit y documentación) quedan pendientes; gates 607 passed + 3 skipped + ruff + mypy Success 18 files)
 ---
 
 ## Resumen por Etapa
@@ -160,10 +160,10 @@ Estado: 🚧
 
 ### Entregables
 - ✅ `src/odin/service/`: contrato portable del modo residente (Item 059 ✅: `src/odin/service/base.py` + `__init__.py` con `ServiceSpec` —`config_path` absoluta validada y `argv = <ejecutable> service run --config <ruta>`—, `ServiceStatus`, `ServiceManagerKind`, `ServiceManager` (ABC), `ServiceRuntime` (Protocol) y `ServiceError`/`ServiceUnsupportedError`/`ServiceNotInstalledError`; `create_service_manager(platform=...)` despacha con import diferido (`importlib`) sin tocar pywin32 en Linux; overrides de mypy para pywin32; 19 tests en `tests/test_service_base.py`; gates: 19 passed + ruff + mypy Success 16 files)
-- 🚧 `src/odin/service/windows.py` (pywin32): `odin service install|uninstall|start|stop|status`, arranque automático, reinicio ante caída, shutdown limpio (Item 061 ✅: `src/odin/service/windows.py` con imports de pywin32 perezosos (`_import_win32` → `ServiceUnsupportedError` fuera de Windows), `OdinWindowsService` construida perezosamente y publicada por `__getattr__` —`SvcDoRun` resuelve la config fijada en la instalación (`SetServiceCustomOption("ConfigPath")`, respaldo `ODIN_CONFIG`) y `SvcStop` espera la detención limpia—, `WindowsServiceManager` con `InstallService` en `SERVICE_AUTO_START`/manual + failure actions `SC_ACTION_RESTART` a `restart_delay_seconds` y reset periódico, `uninstall` idempotente, `start`/`stop` con espera por polling y `status` con auto-start/política de reinicio; 31 tests con dobles de pywin32; la CLI `install|uninstall|start|stop` llega en el Item 062; gates: 568 passed + 3 skipped + ruff + mypy Success 18 files)
+- ✅ `src/odin/service/windows.py` (pywin32): `odin service install|uninstall|start|stop|status`, arranque automático, reinicio ante caída, shutdown limpio (Item 061 ✅: `src/odin/service/windows.py` con imports de pywin32 perezosos (`_import_win32` → `ServiceUnsupportedError` fuera de Windows), `OdinWindowsService` construida perezosamente y publicada por `__getattr__` —`SvcDoRun` resuelve la config fijada en la instalación (`SetServiceCustomOption("ConfigPath")`, respaldo `ODIN_CONFIG`) y `SvcStop` espera la detención limpia—, `WindowsServiceManager` con `InstallService` en `SERVICE_AUTO_START`/manual + failure actions `SC_ACTION_RESTART` a `restart_delay_seconds` y reset periódico, `uninstall` idempotente, `start`/`stop` con espera por polling y `status` con auto-start/política de reinicio; 31 tests con dobles de pywin32. Item 062 ✅: CLI `install|uninstall|start|stop` — `install` exige `--config`/`ODIN_CONFIG`, valida el entorno (`validate_config`, solo ERROR bloquea) y pasa un `ServiceSpec` absoluto con el ejecutable resuelto (`sys.argv[0]`/`shutil.which`), imprimiendo el mensaje del gestor (o la guía sin permisos) y los pasos siguientes por plataforma; `uninstall|start|stop` operan por nombre fijo con `--config` opcional y capturan `ServiceError` → 1; 17 tests nuevos en `tests/test_cli.py`; gates: 88 passed en test_cli + ruff + mypy Success 18 files)
 - 🚧 Linux: `deploy/odin.service` de referencia (systemd `Restart=always`) + guía; comportamiento de `install/uninstall` en Linux documentado (Item 060 ✅: `src/odin/service/linux.py` con `render_unit` puro —`ExecStart` absoluto sin shell, quoting systemd, `Restart=always`/`no`, `User=`/`Group=` opcionales desde `account`— y `LinuxServiceManager` sobre `systemctl` inyectable: `install` escribe la unit + `daemon-reload` + `enable` con permisos y devuelve la guía textual sin ellos, `uninstall` idempotente, `start`/`stop` y `status` mapeando `show` (`is-active`/`is-enabled` de respaldo) a `ServiceStatus`; `deploy/odin.service` con placeholders documentados; 23 tests en `tests/test_service_linux.py`; gates: 42 passed + ruff + mypy Success 17 files)
-- 🚧 `odin service status` completo: estado del servicio, última ejecución, próximo disparo, errores recientes
-- 🚧 Logging persistente del servicio con rotación (sin depender de consola)
+- ✅ `odin service status` completo: estado del servicio, última ejecución, próximo disparo, errores recientes (Item 063 ✅: `render_platform_status` puro en `service/base.py` —encabezado del gestor (`systemd`/`windows`), estado instalado/en ejecución/detenido, arranque automático y política de reinicio en tres estados, sugerencias `odin service install`/`odin service start`— compuesto con `render_service_status`; `_cmd_service_status` consulta el gestor real (ruta absoluta, `manager_factory` inyectable) y degrada un `ServiceError` a advertencia conservando el exit 0; 7 tests en `tests/test_service_status.py` + 6 en `tests/test_cli.py`; gates: 120 passed + ruff + mypy Success 18 files)
+- ✅ Logging persistente del servicio con rotación (sin depender de consola) (Item 064 ✅: `setup_logging(config, console=False)` deja un único `RotatingFileHandler` 5 MiB × 5 backups con nivel y `MaskingFilter`, sin `StreamHandler`, e idempotente entre recargas; `redirect_stdio_to_log(path)` redirige `sys.stdout`/`sys.stderr` a `odin.log` durante el bloque, restaura ambos al salir (incluso con excepción) y descarta el texto si el destino no es escribible; `odin service run` en primer plano conserva la consola; 9 tests nuevos en `tests/test_log.py` (50 passed))
 - 🚧 `docs/service.md`: instalación, permisos (admin/root), arranque en boot, diagnóstico
 
 ### Criterios de aceptación
@@ -245,20 +245,16 @@ Estado: 🚧
 
 ## Próximo Paso
 
-La **Etapa 7** avanzó con el Lote A de `queue-007.md` (items 059-061): el
-subpaquete `src/odin/service/` con el contrato portable (`ServiceSpec`/
-`ServiceStatus`/`ServiceManager`/`ServiceRuntime` y despacho por plataforma con
-import diferido), el gestor Linux sobre systemd con la unit de referencia
-`deploy/odin.service` y el gestor Windows sobre pywin32 (arranque automático,
-reinicio ante caída, `SvcDoRun`/`SvcStop` limpios). La CLI todavía no expone
-`install|uninstall|start|stop` (el `service` actual sigue con
-`run|status|reload`): eso es el Lote B.
+La **Etapa 7** avanzó con el Lote B de `queue-007.md` (items 062-064): la CLI
+expone el ciclo de vida completo (`odin service install|uninstall|start|stop`,
+con instalación que valida la configuración y guía textual sin permisos),
+`odin service status` compone el estado real del gestor del SO con el del
+scheduler y el logging del modo residente soporta `console=False` más
+`redirect_stdio_to_log` para correr sin handles de consola.
 
-Siguiente: en una **nueva sesión de chat** ejecutar
-`/speckit.aide.execute-batch 062-064` para el Lote B — CLI
-`odin service install|uninstall|start|stop` (Item 062), `odin service status`
-completo con gestor de servicios + estado del scheduler (Item 063) y logging
-persistente sin consola (Item 064) —, después `065,066` (Lote C: runner
-compartido y verificación de integración de la unit + runbook Windows) y
-`067,068` (Lote D: `docs/service.md`, README y cierre de la etapa) hasta cerrar
-la Etapa 7.
+Quedan los lotes C y D de `queue-007.md`: `065,066` (runner compartido
+`ServiceRunner` —que consume el logging sin consola y el
+`ServiceRunner`/`SvcDoRun` ya cableados— y verificación de integración de la
+unit systemd + runbook Windows) y `067,068` (`docs/service.md`, README y cierre
+con los gates de calidad) hasta cerrar la Etapa 7. Siguiente: en una **nueva
+sesión de chat** ejecutar `/speckit.aide.execute-batch 065,066`.
