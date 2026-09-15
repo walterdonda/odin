@@ -1,0 +1,42 @@
+# Unit de referencia del modo servicio de ODIN sobre systemd (Etapa 7).
+#
+# ODIN no depende de cron: 'odin service run' ejecuta el scheduler interno del
+# bloque "scheduler" del JSON y cada ciclo corre el pipeline completo (respaldo
+# gbak, compresión 7z, transferencia SFTP, correo y retención) con su propio
+# informe.
+#
+# Instalación (ajustando las rutas marcadas como PLACEHOLDER):
+#   1. Copie este archivo a /etc/systemd/system/odin.service
+#   2. sudo systemctl daemon-reload
+#   3. sudo systemctl enable --now odin.service
+#
+# 'odin service install --config <ruta>' genera esta misma unit con las rutas
+# reales del host; si el usuario no tiene permisos, imprime esta guía sin
+# escribir nada. 'odin service status' informa el estado real del servicio.
+
+[Unit]
+Description=ODIN Backup Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# PLACEHOLDER: ejecutable 'odin' del host (uv tool install deja el script en
+# ~/.local/bin/odin; para un servicio de sistema suele instalarse en
+# /opt/odin/bin). La ruta de la config debe ser absoluta y legible por la
+# cuenta del servicio.
+ExecStart=/opt/odin/bin/odin service run --config /etc/odin/config.json
+# PLACEHOLDER: directorio de trabajo (debe permitir crear work_dir y logs).
+WorkingDirectory=/var/lib/odin
+# Reinicio automático ante caída (el scheduler interno sobrevive a los fallos
+# de cada ciclo; este reinicio cubre caídas del proceso).
+Restart=always
+RestartSec=5
+# Cuenta dedicada opcional (debe existir en el host). Descomente y ajuste:
+#   useradd --system --home /var/lib/odin --shell /usr/sbin/nologin odin
+# y dé acceso de lectura al JSON y de escritura a work_dir/logs.
+#User=odin
+#Group=odin
+
+[Install]
+WantedBy=multi-user.target

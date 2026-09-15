@@ -72,3 +72,23 @@ packages = ["odin"]
 [[tool.mypy.overrides]]
 module = ["paramiko.*", "py7zr.*", "apscheduler.*"]
 ignore_missing_imports = true
+
+# pywin32 solo existe en Windows (marker de la dependencia): los módulos se
+# importan en forma perezosa dentro de odin.service.windows y en Linux deben
+# quedar como Any para que `uv run mypy src/odin` siga verde. La subclase
+# dinámica de ServiceFramework (Item 061) necesita además
+# disallow_subclassing_any = false en ese módulo.
+[[tool.mypy.overrides]]
+module = [
+    "servicemanager",
+    "win32api",
+    "win32con",
+    "win32service",
+    "win32serviceutil",
+    "winerror",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["odin.service.windows"]
+disallow_subclassing_any = false
