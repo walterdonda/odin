@@ -33,6 +33,7 @@ from odin.cli import (
     EXIT_INTERNAL,
     EXIT_OK,
     EXIT_PARTIAL,
+    _reload_signal,
     _stop_signals,
     main,
 )
@@ -41,6 +42,7 @@ from odin.log import LOG_FILENAME, LOGGER_NAME
 from odin.notify import NotificationResult, ReportMessage
 from odin.retention import RetentionError, RetentionResult
 from odin.scheduler import (
+    RELOAD_REQUEST_FILENAME,
     CycleOutcome,
     SchedulerStateStore,
     load_state,
@@ -1223,6 +1225,7 @@ def test_service_without_action_exits_2_with_usage(
     err = capsys.readouterr().err
     assert "run" in err
     assert "status" in err
+    assert "reload" in err
 
 
 def test_service_run_missing_config_source_exits_2(
@@ -1373,3 +1376,101 @@ def test_service_status_missing_config_exits_2(
 ) -> None:
     assert main(["service", "status"]) == EXIT_CONFIG
     assert "No se indicó el archivo de configuración" in capsys.readouterr().err
+
+
+# --- Item 055: service reload (recarga en caliente) ---
+
+
+HAS_SIGUSR1 = hasattr(signal, "SIGUSR1")
+
+
+class _FakeReloadService:
+    """Doble mínimo para el handler de SIGUSR1: cuenta solicitudes."""
+
+    def __init__(self) -> None:
+        self.reload_requests = 0
+
+    def request_reload(self) -> None:
+        self.reload_requests += 1
+
+
+def test_service_reload_without_running_service_reports_clear_message(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+    assert main(["service", "reload", "--config", str(config_path)]) == EXIT_INTERNAL
+    err = capsys.readouterr().err
+    assert "No hay servicio en ejecución" in err
+    assert "no existe el archivo de estado" in err
+
+
+def test_service_reload_stale_state_reports_clear_message(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    if sys.platform.startswith("win"):
+        pytest.skip("la vigencia del pid no se verifica en Windows")
+    config_path = _write_config(tmp_path)
+    _write_service_state(config_path, pid=DEAD_PID)
+    assert main(["service", "reload", "--config", str(config_path)]) == EXIT_INTERNAL
+    err = capsys.readouterr().err
+    assert "No hay servicio en ejecución" in err
+    assert f"pid {DEAD_PID}" in err
+
+
+def test_service_reload_sends_sigusr1_to_running_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    if not HAS_SIGUSR1:
+        pytest.skip("la plataforma no tiene SIGUSR1")
+    config_path = _write_config(tmp_path)
+    _write_service_state(config_path, pid=os.getpid())
+    kills: list[tuple[int, int]] = []
+
+    def fake_kill(pid: int, sig: int) -> None:
+        kills.append((pid, sig))
+
+    monkeypatch.setattr(os, "kill", fake_kill)
+
+    assert main(["service", "reload", "--config", str(config_path)]) == EXIT_OK
+    assert kills == [(os.getpid(), 0), (os.getpid(), signal.SIGUSR1)]
+    assert "SIGUSR1" in capsys.readouterr().out
+
+
+def test_service_reload_writes_control_file_without_signal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+    _write_service_state(config_path, pid=os.getpid())
+    monkeypatch.setattr("odin.cli._RELOAD_VIA_SIGNAL", False)
+    kills: list[tuple[int, int]] = []
+    monkeypatch.setattr(os, "kill", lambda pid, sig: kills.append((pid, sig)))
+
+    assert main(["service", "reload", "--config", str(config_path)]) == EXIT_OK
+    out = capsys.readouterr().out
+    work_dir = load_config(config_path).local.work_dir
+    request_path = work_dir / RELOAD_REQUEST_FILENAME
+    assert request_path.exists()
+    assert "archivo de control" in out
+    assert all(sig != signal.SIGUSR1 for _, sig in kills)
+
+
+def test_service_reload_invalid_config_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+    config_path.write_text("{esto no es json", encoding="utf-8")
+    assert main(["service", "reload", "--config", str(config_path)]) == EXIT_CONFIG
+    assert "JSON malformado" in capsys.readouterr().err
+
+
+def test_reload_signal_requests_reload_and_restores_handler() -> None:
+    if not HAS_SIGUSR1:
+        pytest.skip("la plataforma no tiene SIGUSR1")
+    service = _FakeReloadService()
+    previous = signal.getsignal(signal.SIGUSR1)
+    with _reload_signal(service):  # type: ignore[arg-type]
+        handler = signal.getsignal(signal.SIGUSR1)
+        assert handler is not previous
+        handler(signal.SIGUSR1, None)
+    assert service.reload_requests == 1
+    assert signal.getsignal(signal.SIGUSR1) is previous

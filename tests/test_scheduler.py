@@ -26,6 +26,7 @@ from odin.log import SecretMasker, setup_logging
 from odin.notify import NotificationResult
 from odin.pipeline import PipelineResult
 from odin.scheduler import (
+    RELOAD_WATCHER_JOB_ID,
     CycleOutcome,
     CycleStatus,
     InFlightRegistry,
@@ -35,6 +36,7 @@ from odin.scheduler import (
     cron_trigger,
     load_state,
     next_fire_times,
+    reload_request_path,
     state_path,
 )
 
@@ -180,8 +182,15 @@ def test_service_registers_one_job_per_entry(tmp_path: Path) -> None:
     service = SchedulerService(
         _config(tmp_path, jobs), cycle_runner=FakeRunner(), now=lambda: FIXED_NOW
     )
-    registered = {job.id: job for job in service.scheduler.get_jobs()}
+    registered = {
+        job.id: job
+        for job in service.scheduler.get_jobs()
+        if job.id != RELOAD_WATCHER_JOB_ID
+    }
     assert set(registered) == {"job-0", "job-1"}
+    watcher = service.scheduler.get_job(RELOAD_WATCHER_JOB_ID)
+    assert watcher is not None
+    assert watcher.max_instances == 1
     assert registered["job-0"].args == ("job-0",)
     assert registered["job-0"].max_instances == 1
     assert registered["job-0"].trigger.timezone == BA_TZ
@@ -805,3 +814,198 @@ def test_pipeline_runner_masks_secrets_in_log_and_state(tmp_path: Path) -> None:
     state_text = store.path.read_text(encoding="utf-8")
     assert secret not in state_text
     assert "***" in state_text
+
+
+# --- recarga en caliente (Item 055) ---
+
+
+def _rewrite_config(config: Config, mutate: Any) -> None:
+    """Reescribe el JSON de ``config`` aplicando ``mutate(data)`` in place."""
+    data: dict[str, Any] = json.loads(config.config_path.read_text(encoding="utf-8"))
+    mutate(data)
+    config.config_path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_service_registers_reload_watcher(tmp_path: Path) -> None:
+    service = SchedulerService(_config(tmp_path), cycle_runner=FakeRunner())
+    watcher = service.scheduler.get_job(RELOAD_WATCHER_JOB_ID)
+    assert watcher is not None
+    assert watcher.max_instances == 1
+
+
+def test_reload_valid_config_updates_jobs_and_next_fires(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    store = _state_store(config)
+    applied: list[Config] = []
+    service = SchedulerService(
+        config,
+        cycle_runner=FakeRunner(),
+        now=lambda: FIXED_NOW,
+        state_store=store,
+        on_config_reloaded=applied.append,
+    )
+    _rewrite_config(
+        config,
+        lambda data: data["scheduler"].update(
+            jobs=[
+                {"databases": ["erp_principal"], "schedule": "30 4 * * *"},
+                {"databases": ["erp_principal"], "schedule": "0 6 * * 1"},
+            ]
+        ),
+    )
+
+    service.request_reload()
+    assert service.reload_pending() is True
+    assert service.process_reload() is True
+
+    assert service.reload_pending() is False
+    assert service.config is not config
+    assert service.job_config("job-0").schedule == "30 4 * * *"
+    assert service.job_config("job-1").schedule == "0 6 * * 1"
+    expected = next_fire_times(cron_trigger("30 4 * * *", str(BA_TZ)), FIXED_NOW, 1)[0]
+    scheduled = service.scheduler.get_job("job-0")
+    assert scheduled is not None
+    assert scheduled.next_run_time == expected
+    assert applied == [service.config]
+    assert [database.name for database in service.config.databases] == ["erp_principal"]
+
+    state = store.snapshot()
+    assert [job.job_id for job in state.jobs] == ["job-0", "job-1"]
+    assert state.jobs[0].schedule == "30 4 * * *"
+    assert state.jobs[0].next_fire_time == expected
+    assert load_state(store.path).state == state
+
+
+def test_reload_removes_jobs_missing_from_new_config(tmp_path: Path) -> None:
+    jobs = [
+        {"databases": ["erp_principal"], "schedule": "0 2 * * *"},
+        {"databases": ["erp_principal"], "schedule": "0 3 * * *"},
+    ]
+    config = _config(tmp_path, jobs)
+    store = _state_store(config)
+    service = SchedulerService(
+        config, cycle_runner=FakeRunner(), now=lambda: FIXED_NOW, state_store=store
+    )
+    _rewrite_config(
+        config,
+        lambda data: data["scheduler"].update(
+            jobs=[{"databases": ["erp_principal"], "schedule": "0 5 * * *"}]
+        ),
+    )
+
+    assert service.process_reload() is False  # sin solicitud pendiente
+    service.request_reload()
+    assert service.process_reload() is True
+
+    assert service.scheduler.get_job("job-1") is None
+    assert [job.job_id for job in store.snapshot().jobs] == ["job-0"]
+    discarded = service.run_job("job-1")
+    assert discarded.skipped is True
+    assert discarded.skipped_reason is not None
+    assert "recarga" in discarded.skipped_reason
+
+
+def test_reload_invalid_cron_keeps_previous_config_and_records_reason(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    config = _config(tmp_path)
+    store = _state_store(config)
+    service = SchedulerService(
+        config, cycle_runner=FakeRunner(), now=lambda: FIXED_NOW, state_store=store
+    )
+    _rewrite_config(
+        config,
+        lambda data: data["scheduler"].update(
+            jobs=[{"databases": ["erp_principal"], "schedule": "0 25 * * *"}]
+        ),
+    )
+    service.request_reload()
+
+    with caplog.at_level(logging.ERROR, logger="odin.scheduler"):
+        assert service.process_reload() is False
+
+    assert service.config is config
+    assert service.job_config("job-0").schedule == "0 2 * * *"
+    assert service.scheduler.get_job("job-0") is not None
+    assert "recarga de configuración rechazada" in caplog.text
+    assert "scheduler.jobs[0].schedule" in caplog.text
+    state = load_state(store.path).state
+    assert state is not None
+    assert any("recarga de configuración rechazada" in error for error in state.recent_errors)
+    assert [job.job_id for job in state.jobs] == ["job-0"]
+    assert state.jobs[0].schedule == "0 2 * * *"
+
+
+def test_reload_environment_error_keeps_previous_config(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    store = _state_store(config)
+    service = SchedulerService(
+        config, cycle_runner=FakeRunner(), now=lambda: FIXED_NOW, state_store=store
+    )
+    blocker = tmp_path / "bloqueante"
+    blocker.write_text("no soy un directorio", encoding="utf-8")
+    _rewrite_config(config, lambda data: data["local"].update(work_dir=str(blocker)))
+    service.request_reload()
+
+    assert service.process_reload() is False
+    assert service.config is config
+    assert service.job_config("job-0").schedule == "0 2 * * *"
+    state = load_state(store.path).state
+    assert state is not None
+    assert any("no es un directorio" in error for error in state.recent_errors)
+
+
+def test_reload_control_file_is_consumed_idempotently(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    service = SchedulerService(config, cycle_runner=FakeRunner(), now=lambda: FIXED_NOW)
+    request_path = reload_request_path(config.local.work_dir)
+    request_path.parent.mkdir(parents=True, exist_ok=True)
+    request_path.write_text(FIXED_NOW.isoformat(), encoding="utf-8")
+
+    assert service.reload_pending() is True
+    assert service.process_reload() is True
+    assert not request_path.exists()
+    assert service.process_reload() is False
+
+
+def test_reload_refreshes_state_mask_with_new_secrets(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    store = SchedulerStateStore(
+        state_path(config.local.work_dir),
+        pid=os.getpid(),
+        config_path=str(config.config_path),
+        started_at=FIXED_NOW,
+        mask=SecretMasker.from_config(config).mask,
+        clock=lambda: FIXED_NOW,
+    )
+    service = SchedulerService(
+        config, cycle_runner=FakeRunner(), now=lambda: FIXED_NOW, state_store=store
+    )
+    new_secret = "secreto-nuevo-2026"
+    _rewrite_config(
+        config, lambda data: data["databases"][0].update(password=new_secret)
+    )
+    service.request_reload()
+
+    assert service.process_reload() is True
+    store.record_error(f"falló la recarga con {new_secret}")
+    store.save()
+    content = store.path.read_text(encoding="utf-8")
+    assert new_secret not in content
+    assert "***" in content
+
+
+def test_reload_hook_not_called_on_invalid_config(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    applied: list[Config] = []
+    service = SchedulerService(
+        config,
+        cycle_runner=FakeRunner(),
+        now=lambda: FIXED_NOW,
+        on_config_reloaded=applied.append,
+    )
+    _rewrite_config(config, lambda data: data["scheduler"].update(jobs="no-es-lista"))
+    service.request_reload()
+
+    assert service.process_reload() is False
+    assert applied == []

@@ -298,3 +298,29 @@ def test_write_state_creates_parent_directory(tmp_path: Path) -> None:
     write_state(target, store.snapshot())
     assert target.exists()
     assert load_state(target).state is not None
+
+
+def test_remove_job_drops_only_the_indicated_entry(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    store = _store(config)
+    store.register_job("job-0", config.scheduler.jobs[0])
+    store.register_job("job-1", config.scheduler.jobs[0])
+    store.remove_job("job-0")
+    assert [job.job_id for job in store.snapshot().jobs] == ["job-1"]
+    store.remove_job("job-inexistente")  # idempotente: no falla
+
+
+def test_set_mask_replaces_the_masking_afterwards(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    old_secret = config.databases[0].password
+    assert old_secret
+    store = _store(config, mask=SecretMasker([old_secret]).mask)
+    new_secret = "secreto-nuevo-2026"
+    store.set_mask(SecretMasker([new_secret]).mask)
+    store.register_job("job-0", config.scheduler.jobs[0])
+    store.record_error(f"falló con {old_secret}")
+    store.record_error(f"falló con {new_secret}")
+
+    errors = store.snapshot().recent_errors
+    assert errors[0] == f"falló con {old_secret}"
+    assert errors[1] == "falló con ***"

@@ -21,13 +21,18 @@ log y en el resumen, y degrada el exit code 0 a 1. Después del correo corre la
 retención local (``odin.retention.RetentionExecutor``, Item 046): es una
 función secundaria cuyos errores se reportan pero no alteran el exit code.
 
-Subcomando ``service`` (Item 053): ``run`` arranca el scheduler interno en
-primer plano (``odin.scheduler.SchedulerService``) con el estado consultable
+Subcomando ``service`` (Items 053 y 055): ``run`` arranca el scheduler interno
+en primer plano (``odin.scheduler.SchedulerService``) con el estado consultable
 en ``local.work_dir/scheduler_state.json``; ``SIGINT``/``SIGTERM`` detienen
 limpio (shutdown + estado final) con exit 0. ``status`` lee ese estado y
 presenta última ejecución, próximo disparo, salud y errores recientes; es una
 consulta: devuelve 0 mientras la lectura sea posible, con aviso si el proceso
-ya no corre o no hay estado. El modo servicio del SO (install/start/stop)
+ya no corre o no hay estado. ``reload`` pide la recarga en caliente de la
+configuración: en POSIX envía ``SIGUSR1`` al pid del estado (el servicio lo
+procesa con el job ``reload-watcher``, valida la config nueva y conserva la
+vigente si es inválida) y sin señales (Windows) crea el archivo de control
+``local.work_dir/scheduler_reload.request`` que el servicio consume; devuelve 1
+si no hay servicio en ejecución. El modo servicio del SO (install/start/stop)
 llega en la Etapa 7.
 
 Convención de exit codes (constantes exportadas de este módulo):
@@ -77,6 +82,7 @@ from odin.scheduler import (
     SchedulerService,
     SchedulerStateStore,
     load_state,
+    reload_request_path,
     render_service_status,
     state_path,
 )
@@ -107,6 +113,11 @@ EXIT_PARTIAL = 3
 EXIT_FAILURE = 4
 ENV_CONFIG_VAR = "ODIN_CONFIG"
 
+# Recarga en caliente (Item 055): POSIX pide la recarga con SIGUSR1; las
+# plataformas sin señal (Windows) dejan un archivo de control. La constante es
+# inyectable en tests para cubrir ambas ramas en cualquier SO.
+_RELOAD_VIA_SIGNAL = sys.platform != "win32" and hasattr(signal, "SIGUSR1")
+
 MaskFn = Callable[[str], str]
 ServiceFactory = Callable[..., SchedulerService]
 
@@ -116,12 +127,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     Subcomandos registrados hoy: ``validate``, ``run`` — este último orquesta el
     pipeline completo de las Etapas 2-5 (respaldo, compresión, transferencia,
-    correo y retención local) en ``odin.pipeline`` — y ``service`` (Item 053)
-    con las acciones ``run`` (scheduler en primer plano) y ``status`` (consulta
-    del estado en ``work_dir``). Punto de extensión: sobre ``service`` llegarán
-    ``reload`` (Item 055) e ``install``/``uninstall``/``start``/``stop`` del modo
-    residente del SO (Etapa 7), reutilizando la resolución
-    ``--config``/``ODIN_CONFIG`` de este módulo.
+    correo y retención local) en ``odin.pipeline`` — y ``service`` (Items 053 y
+    055) con las acciones ``run`` (scheduler en primer plano), ``status``
+    (consulta del estado en ``work_dir``) y ``reload`` (recarga en caliente).
+    Punto de extensión: sobre ``service`` llegarán ``install``/``uninstall``/
+    ``start``/``stop`` del modo residente del SO (Etapa 7), reutilizando la
+    resolución ``--config``/``ODIN_CONFIG`` de este módulo.
     """
     parser = argparse.ArgumentParser(
         prog="odin",
@@ -219,6 +230,25 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     service_status_parser.add_argument(
+        "--config",
+        metavar="RUTA",
+        default=None,
+        help=f"ruta al JSON de configuración; si se omite, usa la variable {ENV_CONFIG_VAR}.",
+    )
+    service_reload_parser = service_actions.add_parser(
+        "reload",
+        help="Solicita la recarga en caliente de la configuración al servicio.",
+        description=(
+            "Solicita al servicio en primer plano que recargue la configuración sin "
+            "reiniciar: en POSIX envía SIGUSR1 al pid del estado y sin señales (Windows) "
+            "crea local.work_dir/scheduler_reload.request, que el servicio consume. La "
+            "configuración nueva se valida antes de aplicarse; si es inválida el servicio "
+            "mantiene la vigente y registra el motivo. Devuelve 0 cuando la solicitud se "
+            "entrega, 1 cuando no hay servicio en ejecución y 2 si la configuración no "
+            "puede cargarse."
+        ),
+    )
+    service_reload_parser.add_argument(
         "--config",
         metavar="RUTA",
         default=None,
@@ -632,34 +662,75 @@ def _stop_signals() -> Iterator[None]:
             signal.signal(sig, handler)
 
 
+@contextmanager
+def _reload_signal(service: SchedulerService) -> Iterator[None]:
+    """Instala ``SIGUSR1`` para pedir la recarga en caliente (Item 055).
+
+    El handler solo llama a ``service.request_reload()`` (marca una bandera
+    thread-safe); el job ``reload-watcher`` del servicio procesa la recarga
+    fuera del contexto de la señal. En Windows (sin ``SIGUSR1``) o fuera del
+    hilo principal no se toca ninguna señal: la recarga llega por el archivo de
+    control. Al salir se restaura el handler previo.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    sig = getattr(signal, "SIGUSR1", None)
+    if sig is None:
+        yield
+        return
+
+    def _request_reload(signum: int, frame: Any) -> None:
+        service.request_reload()
+
+    try:
+        previous = signal.getsignal(sig)
+        signal.signal(sig, _request_reload)
+    except (ValueError, OSError):
+        yield
+        return
+    try:
+        yield
+    finally:
+        signal.signal(sig, previous)
+
+
 def _build_scheduler_service(
     config: Config, *, state_store: SchedulerStateStore
 ) -> SchedulerService:
-    """Fábrica real del servicio para ``odin service run`` (Item 053).
+    """Fábrica real del servicio para ``odin service run`` (Items 053 y 055).
 
-    Importa ``PipelineCycleRunner`` en forma diferida: el runner real del
-    pipeline llega en el Item 054 y la CLI con dobles (tests) no debe
-    depender de su construcción. El import queda como punto de extensión
-    explícito de este cableado.
+    Importa ``PipelineCycleRunner`` en forma diferida (la CLI con dobles no debe
+    depender de su construcción) y cablea el hook ``on_config_reloaded``: al
+    aplicar una recarga válida se re-ejecuta ``setup_logging`` (idempotente
+    desde el Item 004) para que el nivel y el enmascarado de secretos queden
+    vigentes; la máscara del estado la refresca el propio servicio.
     """
     from odin.scheduler import PipelineCycleRunner
 
+    def on_config_reloaded(new_config: Config) -> None:
+        _setup_logging_or_warn(new_config)
+
     return SchedulerService(
-        config, cycle_runner=PipelineCycleRunner(), state_store=state_store
+        config,
+        cycle_runner=PipelineCycleRunner(),
+        state_store=state_store,
+        on_config_reloaded=on_config_reloaded,
     )
 
 
 def _cmd_service_run(
     args: argparse.Namespace, *, service_factory: ServiceFactory | None = None
 ) -> int:
-    """Ejecuta ``odin service run``: scheduler en primer plano con estado (Item 053).
+    """Ejecuta ``odin service run``: scheduler en primer plano con estado.
 
-    Orden: carga de configuración (``scheduler.enabled: false`` es un error de
-    configuración: el modo servicio no está habilitado), logging, store del
-    Item 052 y arranque bloqueante. El estado inicial se persiste antes de
-    arrancar y el final en el ``finally`` —también si ``start()`` falla por una
-    excepción imprevista, que ``main`` traduce a exit 1—. ``SIGINT``/``SIGTERM``
-    (o un ``KeyboardInterrupt`` directo) paran el servicio con exit 0.
+    Items 053 y 055. Orden: carga de configuración (``scheduler.enabled: false``
+    es un error de configuración: el modo servicio no está habilitado), logging,
+    store del Item 052 y arranque bloqueante. El estado inicial se persiste
+    antes de arrancar y el final en el ``finally`` —también si ``start()`` falla
+    por una excepción imprevista, que ``main`` traduce a exit 1—.
+    ``SIGINT``/``SIGTERM`` (o un ``KeyboardInterrupt`` directo) paran el
+    servicio con exit 0; ``SIGUSR1`` (POSIX) pide la recarga en caliente.
     ``service_factory`` es inyectable para tests; el default arma el servicio
     real.
     """
@@ -693,7 +764,7 @@ def _cmd_service_run(
             store.path,
         )
     try:
-        with _stop_signals():
+        with _stop_signals(), _reload_signal(service):
             service.start()
     except KeyboardInterrupt:
         if logger is not None:
@@ -720,16 +791,67 @@ def _cmd_service_status(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _cmd_service_reload(args: argparse.Namespace) -> int:
+    """Ejecuta ``odin service reload``: pide la recarga en caliente (Item 055).
+
+    Carga la configuración (para ubicar el ``work_dir``) y lee el estado del
+    servicio: sin estado o con un estado obsoleto no hay a quién pedirle nada
+    (exit 1 con el motivo). Con el servicio vivo, ``_RELOAD_VIA_SIGNAL`` decide
+    el mecanismo: ``SIGUSR1`` al pid del estado en POSIX (un fallo de entrega es
+    exit 1) o la creación de ``work_dir/scheduler_reload.request`` en las
+    plataformas sin señal. La recarga en sí la valida y aplica el servicio
+    (``SchedulerService.process_reload``); una configuración inválida mantiene
+    la vigente sin afectar este exit code.
+    """
+    source = _resolve_config_source(args)
+    config = _load_config_or_report(source)
+    if config is None:
+        return EXIT_CONFIG
+    result = load_state(state_path(config.local.work_dir))
+    if result.state is None:
+        print(
+            f"No hay servicio en ejecución: {result.warning}",
+            file=sys.stderr,
+        )
+        return EXIT_INTERNAL
+    if result.stale:
+        print(
+            "No hay servicio en ejecución: el estado pertenece al pid "
+            f"{result.state.pid}, que ya no vive. Arranque 'odin service run' "
+            "antes de pedir una recarga.",
+            file=sys.stderr,
+        )
+        return EXIT_INTERNAL
+    if _RELOAD_VIA_SIGNAL:
+        try:
+            os.kill(result.state.pid, signal.SIGUSR1)
+        except OSError as exc:
+            print(
+                f"No se pudo enviar SIGUSR1 al pid {result.state.pid}: {exc}",
+                file=sys.stderr,
+            )
+            return EXIT_INTERNAL
+        print(f"Recarga solicitada al pid {result.state.pid} mediante SIGUSR1.")
+        return EXIT_OK
+    request_path = reload_request_path(config.local.work_dir)
+    request_path.parent.mkdir(parents=True, exist_ok=True)
+    request_path.write_text(datetime.now(UTC).isoformat(), encoding="utf-8")
+    print(f"Recarga solicitada: archivo de control creado en {request_path}.")
+    return EXIT_OK
+
+
 def _cmd_service(args: argparse.Namespace) -> int:
-    """Despacha las acciones de ``odin service`` (``run``/``status``)."""
+    """Despacha las acciones de ``odin service`` (``run``/``status``/``reload``)."""
     action = args.service_action
     if action == "run":
         return _cmd_service_run(args)
     if action == "status":
         return _cmd_service_status(args)
+    if action == "reload":
+        return _cmd_service_reload(args)
     print(
-        "Acción de 'service' requerida: run (scheduler en primer plano) o "
-        "status (consulta del estado).",
+        "Acción de 'service' requerida: run (scheduler en primer plano), "
+        "status (consulta el estado) o reload (recarga la configuración).",
         file=sys.stderr,
     )
     return EXIT_CONFIG

@@ -25,6 +25,15 @@ Contenido:
   del job, arma la config del ciclo con ``replace`` y ejecuta ``run_pipeline``
   (correo y retención propios) traduciendo su resultado a ``CycleOutcome``; el
   aislamiento de excepciones y la persistencia quedan en el servicio.
+- Recarga en caliente (Item 055): ``SchedulerService.request_reload()`` marca
+  una bandera thread-safe (la usa el manejador de ``SIGUSR1`` que instala la
+  CLI en POSIX) y el job interno ``reload-watcher`` consume también el archivo
+  de control ``work_dir/scheduler_reload.request`` (plataformas sin señales).
+  ``process_reload()`` valida la configuración editada con ``load_config`` +
+  ``validate_config``: si es válida reemplaza la vigente, actualiza la timezone
+  y re-registra los jobs con sus próximos disparos sin detener el scheduler; si
+  es inválida conserva la vigente y registra el motivo en el log y en el
+  estado.
 
 Decisión de implementación (Item 050): **APScheduler 3.11.3** por sobre 4.x y la
 stdlib.
@@ -63,13 +72,18 @@ from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from odin.backup import BackupResult
-from odin.config import Config, MisfirePolicy, SchedulerJob
+from odin.config import Config, ConfigError, MisfirePolicy, SchedulerJob, load_config
+from odin.log import SecretMasker
 from odin.pipeline import PipelineResult, run_pipeline
 
 __all__ = [
     "MAX_RECENT_ERRORS",
+    "RELOAD_POLL_SECONDS",
+    "RELOAD_REQUEST_FILENAME",
+    "RELOAD_WATCHER_JOB_ID",
     "SCHEMA_VERSION",
     "STATE_FILENAME",
     "CycleOutcome",
@@ -87,6 +101,7 @@ __all__ = [
     "load_state",
     "next_fire_times",
     "pid_is_alive",
+    "reload_request_path",
     "render_service_status",
     "state_path",
     "write_state",
@@ -105,6 +120,13 @@ _MISFIRE_TOLERANCE_SEC = 1
 SCHEMA_VERSION = 1
 STATE_FILENAME = "scheduler_state.json"
 MAX_RECENT_ERRORS = 10
+
+# Recarga en caliente (Item 055): archivo de control que la CLI usa cuando no
+# hay señal (Windows), job interno que lo vigila junto con la bandera de
+# ``SIGUSR1`` y cadencia de la vigilancia.
+RELOAD_REQUEST_FILENAME = "scheduler_reload.request"
+RELOAD_POLL_SECONDS = 2.0
+RELOAD_WATCHER_JOB_ID = "reload-watcher"
 
 CycleRunner = Callable[[Config, SchedulerJob], "CycleOutcome"]
 Clock = Callable[[], datetime]
@@ -310,6 +332,15 @@ class StateLoadResult:
 def state_path(work_dir: Path) -> Path:
     """Ruta del archivo de estado del servicio dentro de ``local.work_dir``."""
     return work_dir / STATE_FILENAME
+
+
+def reload_request_path(work_dir: Path) -> Path:
+    """Ruta del archivo de control de recarga dentro de ``local.work_dir``.
+
+    La CLI lo crea en las plataformas sin ``SIGUSR1`` (Item 055) y el job
+    ``reload-watcher`` del servicio lo detecta y lo consume.
+    """
+    return work_dir / RELOAD_REQUEST_FILENAME
 
 
 def pid_is_alive(pid: int) -> bool:
@@ -624,6 +655,21 @@ class SchedulerStateStore:
         with self._lock:
             self._recent_errors.append(masked)
 
+    def remove_job(self, job_id: str) -> None:
+        """Elimina el estado de un job (p. ej. tras una recarga que lo quitó)."""
+        with self._lock:
+            self._jobs.pop(job_id, None)
+
+    def set_mask(self, mask: Callable[[str], str]) -> None:
+        """Reemplaza el enmascarador (recarga en caliente con secretos nuevos).
+
+        El servicio lo llama al aplicar una configuración nueva para que los
+        ``error_message`` que se persistan a partir de ese momento se enmascaren
+        con los secretos vigentes y no con los de la configuración anterior.
+        """
+        with self._lock:
+            self._mask = mask
+
     def _snapshot_locked(self) -> ServiceState:
         return ServiceState(
             version=SCHEMA_VERSION,
@@ -828,6 +874,12 @@ class SchedulerService:
     completa y el ``SchedulerJob`` del disparo y devuelve un ``CycleOutcome``.
     Los últimos desenlaces quedan en ``last_outcomes`` por id de job. El reloj
     (``now``) es inyectable para tests deterministas.
+
+    La recarga en caliente (Item 055) se pide con ``request_reload()`` (usada
+    por el manejador de ``SIGUSR1``) o dejando ``scheduler_reload.request`` en
+    ``local.work_dir``; el job interno ``reload-watcher`` llama a
+    ``process_reload()`` periódicamente. ``on_config_reloaded`` es el hook
+    (opcional) que la CLI usa para renovar el logging al aplicar una config.
     """
 
     def __init__(
@@ -839,19 +891,26 @@ class SchedulerService:
         now: Clock | None = None,
         in_flight: InFlightRegistry | None = None,
         state_store: SchedulerStateStore | None = None,
+        on_config_reloaded: Callable[[Config], None] | None = None,
     ) -> None:
         self.config = config
         self._cycle_runner = cycle_runner
         self._timezone = ZoneInfo(config.scheduler.timezone)
+        self._now_override = now
         self._now: Clock = now or (lambda: datetime.now(self._timezone))
         self._scheduler = scheduler or BlockingScheduler(timezone=self._timezone)
         self._in_flight = in_flight or InFlightRegistry()
         self._state_store = state_store
+        self._on_config_reloaded = on_config_reloaded
         self._jobs: dict[str, SchedulerJob] = {}
         self._triggers: dict[str, CronTrigger] = {}
         self._expected_fires: dict[str, datetime | None] = {}
+        self._reload_requested = threading.Event()
+        self._reload_lock = threading.Lock()
+        self._reload_path = reload_request_path(config.local.work_dir)
         self.last_outcomes: dict[str, CycleOutcome] = {}
         self._register_jobs()
+        self._register_reload_watcher()
 
     @property
     def scheduler(self) -> BlockingScheduler:
@@ -872,9 +931,16 @@ class SchedulerService:
         ejecuta aunque llegue tarde) y ``_MISFIRE_TOLERANCE_SEC`` para ``skip``
         (los disparos vencidos los descarta APScheduler y, además, el guard de
         latencia de ``run_job`` usa el reloj inyectable).
+
+        Un job existente con el mismo id se elimina antes de agregarlo: con el
+        scheduler detenido ``replace_existing`` no reemplaza a los jobs
+        pendientes de la recarga (quedarían duplicados y ``get_job`` devolvería
+        el viejo), así que la re-registración en caliente lo hace explícito.
         """
         for index, job in enumerate(self.config.scheduler.jobs):
             job_id = f"job-{index}"
+            if self._scheduler.get_job(job_id) is not None:
+                self._scheduler.remove_job(job_id)
             trigger = cron_trigger(job.schedule, self.config.scheduler.timezone)
             run_once = job.on_misfire is MisfirePolicy.RUN_ONCE
             next_fire = trigger.get_next_fire_time(None, self._now())
@@ -907,6 +973,133 @@ class SchedulerService:
     def job_config(self, job_id: str) -> SchedulerJob:
         """Configuración del job registrado (``KeyError`` si no existe)."""
         return self._jobs[job_id]
+
+    # --- recarga en caliente (Item 055) ---
+
+    def _register_reload_watcher(self) -> None:
+        """Registra el job interno que procesa las recargas pendientes.
+
+        ``IntervalTrigger`` cada ``RELOAD_POLL_SECONDS`` (con la timezone
+        vigente), ``max_instances=1`` y ``replace_existing``: se re-registra al
+        aplicar una configuración nueva sin duplicarse. No aparece en
+        ``self._jobs`` ni en el estado —no es un job de la configuración—.
+        """
+        self._scheduler.add_job(
+            self.process_reload,
+            trigger=IntervalTrigger(seconds=RELOAD_POLL_SECONDS, timezone=self._timezone),
+            id=RELOAD_WATCHER_JOB_ID,
+            name=RELOAD_WATCHER_JOB_ID,
+            max_instances=1,
+            replace_existing=True,
+            coalesce=True,
+            misfire_grace_time=int(RELOAD_POLL_SECONDS),
+        )
+
+    @property
+    def reload_request_path(self) -> Path:
+        """Ruta del archivo de control de recarga que vigila el servicio."""
+        return self._reload_path
+
+    def request_reload(self) -> None:
+        """Marca una recarga pendiente (thread-safe).
+
+        Es la única operación que ejecuta el manejador de ``SIGUSR1``: solo
+        activa un ``threading.Event``, sin tocar el scheduler desde el contexto
+        de la señal. El job ``reload-watcher`` la procesa poco después.
+        """
+        self._reload_requested.set()
+
+    def reload_pending(self) -> bool:
+        """Indica si hay una recarga pendiente (bandera o archivo de control)."""
+        return self._reload_requested.is_set() or self._reload_path.exists()
+
+    def _consume_reload_request(self) -> None:
+        """Limpia la bandera y elimina el archivo de control (idempotente)."""
+        self._reload_requested.clear()
+        with contextlib.suppress(OSError):
+            self._reload_path.unlink()
+
+    def _reject_reload(self, reason: str) -> None:
+        """Conserva la configuración vigente y registra el motivo (log + estado)."""
+        message = f"recarga de configuración rechazada: {reason}"
+        logger.error("%s", message)
+        if self._state_store is not None:
+            self._state_store.record_error(message)
+            self._state_store.save()
+
+    def process_reload(self) -> bool:
+        """Procesa una recarga pendiente; ``True`` si aplicó una config válida.
+
+        Consume la solicitud (bandera + archivo de control) y valida la
+        configuración editada en ``config.config_path`` con ``load_config``
+        (estructura/semántica) y ``validate_config`` (entorno y coherencia,
+        importado en forma diferida porque ``odin.validate`` importa este
+        módulo). Si es válida, ``_apply_config`` la aplica en caliente y llama
+        al hook ``on_config_reloaded``; si no, ``_reject_reload`` deja el
+        servicio con la configuración vigente y el motivo en el log y en el
+        estado. Un lock serializa los procesamientos (el watcher y una llamada
+        directa no se pisan).
+        """
+        with self._reload_lock:
+            if not self.reload_pending():
+                return False
+            self._consume_reload_request()
+            try:
+                new_config = load_config(self.config.config_path)
+            except ConfigError as exc:
+                self._reject_reload(str(exc))
+                return False
+            from odin.validate import validate_config
+
+            report = validate_config(new_config)
+            if not report.is_valid(strict=False):
+                detail = "; ".join(
+                    f"{finding.field_path}: {finding.message}"
+                    for finding in report.errors
+                )
+                self._reject_reload(f"configuración inválida: {detail}")
+                return False
+            self._apply_config(new_config)
+            logger.info(
+                "Configuración recargada en caliente: %d job(s) en %s (%s)",
+                len(new_config.scheduler.jobs),
+                new_config.scheduler.timezone,
+                new_config.config_path,
+            )
+            return True
+
+    def _apply_config(self, config: Config) -> None:
+        """Aplica ``config`` sin reiniciar: timezone, jobs, estado y máscara.
+
+        Los jobs que ya no existen se eliminan del scheduler y del estado; los
+        vigentes se re-registran con ``replace_existing`` (trigger y próximo
+        disparo nuevos). La máscara del ``SchedulerStateStore`` se refresca con
+        los secretos de la configuración nueva y el hook ``on_config_reloaded``
+        permite a la CLI renovar el logging (``setup_logging`` es idempotente).
+        """
+        previous_ids = set(self._jobs)
+        self.config = config
+        self._timezone = ZoneInfo(config.scheduler.timezone)
+        if self._now_override is None:
+            self._now = lambda: datetime.now(self._timezone)
+        self._scheduler.timezone = self._timezone
+        self._reload_path = reload_request_path(config.local.work_dir)
+        current_ids = {f"job-{index}" for index in range(len(config.scheduler.jobs))}
+        for job_id in previous_ids - current_ids:
+            if self._scheduler.get_job(job_id) is not None:
+                self._scheduler.remove_job(job_id)
+            self._jobs.pop(job_id, None)
+            self._triggers.pop(job_id, None)
+            self._expected_fires.pop(job_id, None)
+            if self._state_store is not None:
+                self._state_store.remove_job(job_id)
+        self._register_jobs()
+        self._register_reload_watcher()
+        if self._state_store is not None:
+            self._state_store.set_mask(SecretMasker.from_config(config).mask)
+            self._state_store.save()
+        if self._on_config_reloaded is not None:
+            self._on_config_reloaded(config)
 
     def _skip(self, job_id: str, reason: str) -> CycleOutcome:
         """Registra y devuelve la omisión de un ciclo (log + ``CycleOutcome``)."""
@@ -959,9 +1152,21 @@ class SchedulerService:
           terminar, incluso si el runner lanza.
 
         Un fallo inesperado del ``cycle_runner`` no escapa: se convierte en un
-        ``CycleOutcome`` fallido y el servicio sigue operativo.
+        ``CycleOutcome`` fallido y el servicio sigue operativo. Un disparo
+        encolado de un job que la recarga en caliente acaba de eliminar se
+        descarta como omisión, sin registrar un ciclo de un job inexistente.
         """
-        job = self._jobs[job_id]
+        job = self._jobs.get(job_id)
+        if job is None:
+            logger.warning(
+                "Job '%s' ya no existe (configuración recargada): ciclo descartado",
+                job_id,
+            )
+            return CycleOutcome(
+                job_databases=(),
+                skipped=True,
+                skipped_reason="job eliminado por la recarga de configuración",
+            )
         now = self._now()
         expected = self._expected_fires.get(job_id)
         if expected is not None:
