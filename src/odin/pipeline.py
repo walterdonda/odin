@@ -1,6 +1,7 @@
-"""Pipeline de ``odin run``: respaldo → compresión → transferencia (Item 035).
+"""Pipeline de ``odin run``: respaldo → compresión → transferencia → correo.
 
-``run_pipeline`` orquesta las tres fases acumuladas por base:
+``run_pipeline`` orquesta las tres fases acumuladas por base más la
+notificación:
 
 1. **Respaldo** (Etapa 2): ``BackupExecutor.run_batch_backup`` sobre todas las
    bases de la configuración.
@@ -9,6 +10,13 @@
 3. **Transferencia** (Etapa 4): para cada base con respaldo + compresión
    exitosos, ``TransferExecutor.run_batch_transfer`` envía el ``.fbk.7z`` a
    todos los servidores configurados, aislando los fallos por destino.
+4. **Notificación** (Etapa 5, Item 043): con el lote final ya construido se
+   renderiza el informe (``odin.notify.render_report``) con las últimas
+   ``notification.log_tail_lines`` líneas capturadas durante las fases, y se
+   envía con ``EmailNotifier``. El correo se envía **siempre** —éxito total,
+   fallo parcial, fallo total, lote no ejecutado y lote vacío—; un SMTP caído
+   no lanza: el error queda en ``NotificationResult.error_message`` (la CLI
+   degrada el exit code, Item 044).
 
 El éxito global depende de la culminación exitosa de todas las fases para
 cada base: una base con transferencia fallida queda marcada como fallida en
@@ -18,7 +26,9 @@ transferencia se considera satisfecha (nada que transferir).
 
 El módulo no propaga excepciones operativas: cada fase ya encapsula sus
 errores en sus propios resultados (patrón de aislamiento de fallos de las
-Etapas 2-4). Los ejecutores son inyectables para tests.
+Etapas 2-4) y el envío tiene una red de seguridad que convierte una
+excepción imprevista del notifier en un ``NotificationResult`` fallido. Los
+ejecutores y el notifier son inyectables para tests.
 """
 
 from __future__ import annotations
@@ -29,6 +39,8 @@ from dataclasses import dataclass, replace
 from odin.backup import BackupExecutor, BackupResult, BatchBackupResult
 from odin.compress import BatchCompressionResult, CompressionExecutor
 from odin.config import Config
+from odin.log import SecretMasker, capture_log_tail, logger
+from odin.notify import EmailNotifier, NotificationResult, ReportMessage, render_report
 from odin.transfer import (
     BatchTransferResult,
     TransferExecutor,
@@ -48,10 +60,14 @@ class PipelineResult:
     los ``BatchTransferResult`` por base transferida (bases con respaldo +
     compresión exitosos, en el orden de la configuración de servidores);
     las bases que no llegaron a transferirse no aparecen en el mapping.
+    ``notification`` es el desenlace del envío del informe (Item 043);
+    ``None`` solo en construcciones manuales del resultado (el pipeline real
+    siempre envía y lo deja informado).
     """
 
     backup: BatchBackupResult
     transfers: Mapping[str, BatchTransferResult]
+    notification: NotificationResult | None = None
 
 
 def _merge_compression_results(
@@ -113,19 +129,45 @@ def _transfer_error_detail(results: Sequence[TransferResult]) -> str:
     )
 
 
+def _send_report(
+    notifier: EmailNotifier, report: ReportMessage, recipient: str
+) -> NotificationResult:
+    """Envía el informe con red de seguridad: nunca propaga una excepción.
+
+    ``EmailNotifier.send`` ya encapsula los errores SMTP esperados; esta capa
+    cubre lo imprevisto (un fallo de programación del notifier, una excepción
+    fuera del contrato) para garantizar que el pipeline siempre retorne con
+    ``NotificationResult`` en vez de romper la corrida.
+    """
+    try:
+        return notifier.send(report)
+    except Exception as exc:  # noqa: BLE001 - red de seguridad del pipeline
+        message = f"fallo inesperado del notificador: {type(exc).__name__}: {exc}"
+        logger.error("%s", message)
+        return NotificationResult(success=False, recipient=recipient, error_message=message)
+
+
 def run_pipeline(
     config: Config,
     *,
     backup: BackupExecutor | None = None,
     compression: CompressionExecutor | None = None,
     transfer: TransferExecutor | None = None,
+    notifier: EmailNotifier | None = None,
 ) -> PipelineResult:
     """Ejecuta el pipeline completo de ``odin run`` y devuelve el resultado.
 
     Los ejecutores se construyen desde ``config`` (``local.gbak_timeout_sec``
     para respaldo; ``compression.level``/``password`` para compresión) y son
-    inyectables para tests. Cada fase aísla sus fallos; el éxito global exige
-    que todas las fases culminen bien para cada base.
+    inyectables para tests; el notifier default es
+    ``EmailNotifier.from_config(config)`` (Item 043). Cada fase aísla sus
+    fallos; el éxito global exige que todas las fases culminen bien para cada
+    base.
+
+    Las tres fases corren con un ``TailBufferHandler`` adjunto (Item 041) que
+    captura las últimas ``notification.log_tail_lines`` líneas —ya
+    enmascaradas— para el informe; el correo se envía después de las fases,
+    con el lote final, también cuando el lote falló o quedó vacío.
     """
     backup_executor = backup or BackupExecutor(timeout=config.local.gbak_timeout_sec)
     compression_executor = compression or CompressionExecutor(
@@ -133,39 +175,48 @@ def run_pipeline(
         password=config.compression.password,
     )
     transfer_executor = transfer or TransferExecutor()
+    notifier = notifier or EmailNotifier.from_config(config)
 
-    batch = backup_executor.run_batch_backup(config.databases, config.local.work_dir)
-    compressed = compression_executor.run_batch_compression(batch.results)
-    merged = _merge_compression_results(batch, compressed)
+    with capture_log_tail(
+        config.notification.log_tail_lines, SecretMasker.from_config(config)
+    ) as tail:
+        batch = backup_executor.run_batch_backup(config.databases, config.local.work_dir)
+        compressed = compression_executor.run_batch_compression(batch.results)
+        merged = _merge_compression_results(batch, compressed)
 
-    transfers: dict[str, BatchTransferResult] = {}
-    final_results: list[BackupResult] = []
-    for result in merged.results:
-        if not result.success or result.archive_path is None:
-            final_results.append(result)
-            continue
-        if not config.servers:
-            final_results.append(result)
-            continue
-        transfer_results = transfer_executor.run_batch_transfer(
-            config.servers, result.archive_path
-        )
-        batch_transfer = aggregate_transfer_results(transfer_results)
-        transfers[result.database_name] = batch_transfer
-        if batch_transfer.success:
-            final_results.append(result)
-        else:
-            final_results.append(
-                replace(
-                    result,
-                    success=False,
-                    transfer_error_message=_transfer_error_detail(batch_transfer.results),
-                )
+        transfers: dict[str, BatchTransferResult] = {}
+        final_results: list[BackupResult] = []
+        for result in merged.results:
+            if not result.success or result.archive_path is None:
+                final_results.append(result)
+                continue
+            if not config.servers:
+                final_results.append(result)
+                continue
+            transfer_results = transfer_executor.run_batch_transfer(
+                config.servers, result.archive_path
             )
+            batch_transfer = aggregate_transfer_results(transfer_results)
+            transfers[result.database_name] = batch_transfer
+            if batch_transfer.success:
+                final_results.append(result)
+            else:
+                final_results.append(
+                    replace(
+                        result,
+                        success=False,
+                        transfer_error_message=_transfer_error_detail(batch_transfer.results),
+                    )
+                )
 
-    final_batch = replace(
-        merged,
-        results=final_results,
-        success=bool(final_results) and all(result.success for result in final_results),
-    )
-    return PipelineResult(backup=final_batch, transfers=transfers)
+        final_batch = replace(
+            merged,
+            results=final_results,
+            success=bool(final_results) and all(result.success for result in final_results),
+        )
+        log_tail = tail.lines
+
+    pipeline_result = PipelineResult(backup=final_batch, transfers=transfers)
+    report = render_report(config, pipeline_result, log_tail=log_tail)
+    notification = _send_report(notifier, report, config.notification.to)
+    return replace(pipeline_result, notification=notification)

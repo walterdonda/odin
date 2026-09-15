@@ -8,32 +8,39 @@ registra el resultado en consola y archivo con secretos enmascarados
 (``odin.log.setup_logging``, Item 004). Con ``--strict`` las advertencias
 también fallan (exit code 2), útil como gate de despliegue o de CI.
 
-Subcomando ``run``: ejecuta el pipeline completo (``odin.pipeline``, Item 035):
-respaldo (``odin.backup.BackupExecutor``), compresión 7z
-(``odin.compress.CompressionExecutor``) y transferencia SFTP
-(``odin.transfer.TransferExecutor``) sobre todas las bases de la
-configuración, de forma secuencial y con aislamiento de fallos por base y por
-servidor. Una base cuenta como exitosa solo si el respaldo, la compresión y
-la transferencia a todos los servidores culminan bien (Items 025 y 035). El
-subcomando ``service`` (Etapas 6-7) aún no se registra; el punto de extensión
-queda documentado en ``build_parser``.
+Subcomando ``run``: ejecuta el pipeline completo (``odin.pipeline``, Items 035
+y 043): respaldo (``odin.backup.BackupExecutor``), compresión 7z
+(``odin.compress.CompressionExecutor``), transferencia SFTP
+(``odin.transfer.TransferExecutor``) y notificación por correo
+(``odin.notify.EmailNotifier``) sobre todas las bases de la configuración, de
+forma secuencial y con aislamiento de fallos por base y por servidor. Una
+base cuenta como exitosa solo si el respaldo, la compresión y la transferencia
+a todos los servidores culminan bien (Items 025 y 035). El informe se envía
+**siempre** (éxito, parcial o fallo); un SMTP caído no crashea: queda en el
+log y en el resumen, y degrada el exit code 0 a 1. El subcomando ``service``
+(Etapas 6-7) aún no se registra; el punto de extensión queda documentado en
+``build_parser``.
 
 Convención de exit codes (constantes exportadas de este módulo):
 
 - ``EXIT_OK`` (0): operación exitosa (configuración válida, aunque tenga
   advertencias salvo con ``--strict``; respaldo, compresión y transferencia
-  de todas las bases exitosos).
+  de todas las bases exitosos **y correo enviado**).
 - ``EXIT_INTERNAL`` (1): error interno inesperado (bug, fallo de I/O no
   controlado); se imprime mensaje + traceback en stderr sin morir con una
-  excepción sin manejar.
+  excepción sin manejar. Incluye el fallo de notificación en una corrida por
+  lo demás exitosa: una ejecución sin correo incumple el contrato de
+  trazabilidad (visión C2/C4), así que no puede devolver 0.
 - ``EXIT_CONFIG`` (2): error de configuración (archivo ilegible/inexistente,
   JSON malformado, problema estructural o semántico, verificación de entorno
   fallida, falta la ruta de config) o de uso de la CLI (errores de argparse,
   p. ej. subcomando inexistente).
 - ``EXIT_PARTIAL`` (3): algunas bases completaron todas las fases y otras
   fallaron (en cualquiera de las fases: respaldo, compresión o transferencia).
+  Un fallo de notificación no cambia este código: el correo sí salió.
 - ``EXIT_FAILURE`` (4): el pipeline falló por completo (ninguna base completó
-  todas las fases; p. ej. gbak no encontrado o ``work_dir`` no creable).
+  todas las fases; p. ej. gbak no encontrado o ``work_dir`` no creable) o el
+  lote no se ejecutó / quedó vacío. Tiene precedencia sobre el correo.
 """
 
 from __future__ import annotations
@@ -49,6 +56,7 @@ from odin import __version__
 from odin.backup import BatchBackupResult
 from odin.config import Config, ConfigError, load_config
 from odin.log import SecretMasker, setup_logging
+from odin.notify import NotificationResult
 from odin.pipeline import PipelineResult, run_pipeline
 from odin.validate import (
     Severity,
@@ -121,15 +129,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser = subparsers.add_parser(
         "run",
-        help="Ejecuta el respaldo (gbak), la compresión 7z y la transferencia SFTP.",
+        help="Ejecuta respaldo (gbak), compresión 7z, transferencia SFTP y el correo.",
         description=(
             "Ejecuta el pipeline completo de cada base de la configuración: respaldo "
-            "(gbak -b), compresión 7z y transferencia SFTP del .fbk.7z a todos los "
-            "servidores configurados, de forma secuencial y con aislamiento de fallos "
-            "por base y por servidor. Los artefactos se guardan en local.work_dir como "
-            "<nombre>_<timestamp>.fbk y su .fbk.7z. Una base cuenta como exitosa solo "
-            "si el respaldo, la compresión y la transferencia culminan bien "
-            "(exit codes 0/3/4)."
+            "(gbak -b), compresión 7z, transferencia SFTP del .fbk.7z a todos los "
+            "servidores configurados y envío del informe por correo, de forma "
+            "secuencial y con aislamiento de fallos por base y por servidor. Los "
+            "artefactos se guardan en local.work_dir como <nombre>_<timestamp>.fbk y "
+            "su .fbk.7z. Una base cuenta como exitosa solo si el respaldo, la "
+            "compresión y la transferencia culminan bien; el correo se envía siempre "
+            "y un fallo de notificación en una corrida por lo demás exitosa devuelve "
+            "exit code 1 (matriz completa: 0/1/3/4)."
         ),
     )
     run_parser.add_argument(
@@ -338,14 +348,44 @@ def _print_transfer_summary(
                 )
 
 
-def _cmd_run(args: argparse.Namespace) -> int:
-    """Ejecuta ``odin run``: respaldo (gbak) + compresión 7z + transferencia SFTP.
+def _print_notification_summary(
+    notification: NotificationResult | None, *, mask: MaskFn | None = None
+) -> None:
+    """Imprime el resultado de la fase de correo (Item 044).
 
-    El pipeline completo (respaldo → compresión → transferencia, Item 035)
-    vive en ``odin.pipeline.run_pipeline``. Exit codes: 0 si todas las bases
-    completaron las tres fases, 3 si hubo una mezcla de éxitos y fallos (en
-    cualquier fase), 4 si falló todo o si no hay gbak disponible. Los errores
-    de configuración (carga/parseo) son 2, igual que en ``validate``.
+    Éxito ("Correo enviado a ...") por stdout y fallo ("Correo NO enviado:
+    motivo") por stderr, como el resto de los fallos del resumen. Con ``mask``
+    cada línea pasa por el enmascarador de secretos: el ``error_message``
+    puede contener credenciales SMTP dentro de una excepción.
+    """
+    mask = mask or (lambda line: line)
+    if notification is not None and notification.success:
+        print(
+            mask(
+                f"Correo enviado a {notification.recipient} "
+                f"({notification.duration_seconds:.1f} s)."
+            )
+        )
+        return
+    detail = (
+        notification.error_message
+        if notification is not None and notification.error_message
+        else "sin resultado de notificación"
+    )
+    print(mask(f"Correo NO enviado: {detail}"), file=sys.stderr)
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    """Ejecuta ``odin run``: respaldo (gbak) + compresión 7z + transferencia SFTP + correo.
+
+    El pipeline completo vive en ``odin.pipeline.run_pipeline`` (Items 035 y
+    043). Matriz de exit codes (Item 044): ``0`` si todas las bases
+    completaron las tres fases **y** el correo se envió; ``1`` si el correo
+    falló en una corrida por lo demás exitosa (una ejecución sin informe
+    incumple la trazabilidad); ``3`` si hubo mezcla de éxitos y fallos en
+    cualquier fase (aunque el correo falle); ``4`` si falló todo, el lote no
+    se ejecutó o quedó vacío (tiene precedencia sobre el correo); ``2`` para
+    errores de configuración (carga/parseo), igual que en ``validate``.
     """
     source = _resolve_config_source(args)
     if source is None:
@@ -371,9 +411,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
         )
     pipeline = run_pipeline(config)
     batch = pipeline.backup
+    notification = pipeline.notification
     masker = SecretMasker.from_config(config)
     _print_backup_summary(batch, mask=masker.mask)
     _print_transfer_summary(pipeline, mask=masker.mask)
+    _print_notification_summary(notification, mask=masker.mask)
 
     succeeded = sum(result.success for result in batch.results)
     if logger is not None:
@@ -395,10 +437,24 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 len(transfer_batch.results),
                 transfer_batch.total_duration_seconds,
             )
+        if notification is not None and notification.success:
+            logger.info(
+                "Notificación finalizada: correo enviado a %s", notification.recipient
+            )
+        else:
+            detail = (
+                notification.error_message
+                if notification is not None and notification.error_message
+                else "sin resultado de notificación"
+            )
+            logger.error("Correo NO enviado: %s", detail)
+
     if batch.error_message is not None or not batch.results:
         return EXIT_FAILURE
     if batch.success:
-        return EXIT_OK
+        if notification is not None and notification.success:
+            return EXIT_OK
+        return EXIT_INTERNAL
     if succeeded:
         return EXIT_PARTIAL
     return EXIT_FAILURE

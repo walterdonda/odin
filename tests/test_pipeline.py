@@ -1,15 +1,19 @@
-"""Tests del pipeline de ``odin run`` (Item 035): respaldo → compresión → transferencia."""
+"""Tests del pipeline de ``odin run``: respaldo → compresión → transferencia → correo."""
 
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from odin.backup import BackupResult, BatchBackupResult
 from odin.compress import BatchCompressionResult, CompressionResult
 from odin.config import Config, ServerConfig, load_config
+from odin.notify import NotificationResult, ReportMessage
 from odin.pipeline import PipelineResult, run_pipeline
 from odin.transfer import BatchTransferResult, TransferResult
 
@@ -18,7 +22,9 @@ FIXTURES = Path(__file__).parent / "fixtures"
 ARCHIVE_SUFFIX = ".fbk.7z"
 
 
-def _config(tmp_path: Path, *, servers: bool = True) -> Config:
+def _config(
+    tmp_path: Path, *, servers: bool = True, log_tail_lines: int | None = None
+) -> Config:
     """Config Linux válida con ``work_dir`` en ``tmp_path`` (servidores opcionales)."""
     data: dict[str, Any] = json.loads(
         (FIXTURES / "config_valid_linux.json").read_text(encoding="utf-8")
@@ -26,6 +32,8 @@ def _config(tmp_path: Path, *, servers: bool = True) -> Config:
     data["local"]["work_dir"] = str(tmp_path / "work")
     if not servers:
         data["servers"] = []
+    if log_tail_lines is not None:
+        data["notification"]["log_tail_lines"] = log_tail_lines
     path = tmp_path / "config.json"
     path.write_text(json.dumps(data), encoding="utf-8")
     return load_config(str(path))
@@ -156,6 +164,48 @@ def _all_fail(servers: list[ServerConfig], local_path: Path) -> list[TransferRes
         )
         for server in servers
     ]
+
+
+class FakeNotifier:
+    """Doble de ``EmailNotifier``: registra los informes y permite forzar el desenlace."""
+
+    def __init__(
+        self,
+        result: NotificationResult | None = None,
+        exception: Exception | None = None,
+    ) -> None:
+        self._result = result
+        self._exception = exception
+        self.calls: list[ReportMessage] = []
+        self.to = "control@example.com"
+
+    def send(self, report: ReportMessage) -> NotificationResult:
+        self.calls.append(report)
+        if self._exception is not None:
+            raise self._exception
+        if self._result is not None:
+            return self._result
+        return NotificationResult(success=True, recipient=self.to, duration_seconds=0.01)
+
+
+class _OfflineNotifier:
+    """Notifier default sin red para los tests que no inyectan uno propio."""
+
+    def __init__(self) -> None:
+        self.to = "control@example.com"
+
+    @classmethod
+    def from_config(cls, config: Config) -> _OfflineNotifier:
+        return cls()
+
+    def send(self, report: ReportMessage) -> NotificationResult:
+        return NotificationResult(success=True, recipient=self.to)
+
+
+@pytest.fixture(autouse=True)
+def offline_notifier(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Evita que el notifier default abra SMTP real (Item 043)."""
+    monkeypatch.setattr("odin.pipeline.EmailNotifier", _OfflineNotifier)
 
 
 def test_full_success_runs_all_three_phases(tmp_path: Path) -> None:
@@ -302,3 +352,187 @@ def test_mixed_databases_isolate_transfer_failures(tmp_path: Path) -> None:
     assert dos.transfer_error_message is None
     assert result.backup.success is False
     assert set(result.transfers) == {"uno", "dos"}
+
+
+# --- Notificación del pipeline (Item 043) ---
+
+
+def _run_successful(config: Config, notifier: FakeNotifier) -> PipelineResult:
+    """Corrida totalmente exitosa con el notifier indicado."""
+    return run_pipeline(
+        config,
+        backup=FakeBackupExecutor([_backup_result("erp_principal")]),
+        compression=FakeCompressionExecutor(
+            {"erp_principal": _compression_result("erp_principal")}
+        ),
+        transfer=FakeTransferExecutor(_all_ok),
+        notifier=notifier,
+    )
+
+
+class LoggingBackupExecutor(FakeBackupExecutor):
+    """Respaldo doble que emite una línea de log durante la fase."""
+
+    def run_batch_backup(self, databases: list[Any], work_dir: Path) -> BatchBackupResult:
+        logging.getLogger("odin").info("marca-de-cola-123456")
+        return super().run_batch_backup(databases, work_dir)
+
+
+def test_success_sends_report_once_with_rendered_content(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    notifier = FakeNotifier()
+
+    result = _run_successful(config, notifier)
+
+    assert len(notifier.calls) == 1
+    report = notifier.calls[0]
+    assert report.subject.startswith("[ODIN] ÉXITO — respaldo de ")
+    assert "erp_principal" in report.body
+    assert "Servidores destino:" in report.body
+    assert "sitio-alterno-1" in report.body
+    assert "Totales:" in report.body
+    assert result.notification is not None
+    assert result.notification.success is True
+    assert result.notification.recipient == "control@example.com"
+
+
+def test_total_failure_still_sends_report(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    notifier = FakeNotifier()
+
+    result = run_pipeline(
+        config,
+        backup=FakeBackupExecutor([_backup_result("erp_principal", success=False)]),
+        compression=FakeCompressionExecutor({}),
+        transfer=FakeTransferExecutor(_all_ok),
+        notifier=notifier,
+    )
+
+    assert len(notifier.calls) == 1
+    report = notifier.calls[0]
+    assert report.subject.startswith("[ODIN] FALLO — respaldo de ")
+    assert "database is in use" in report.body
+    assert result.notification is not None
+    assert result.notification.success is True
+
+
+def test_batch_not_executed_still_sends_report(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    notifier = FakeNotifier()
+
+    class ErrorBatchExecutor:
+        def run_batch_backup(self, databases: list[Any], work_dir: Path) -> BatchBackupResult:
+            return BatchBackupResult(
+                results=[],
+                success=False,
+                total_duration_seconds=0.0,
+                error_message="no se pudo preparar el directorio de trabajo",
+            )
+
+    result = run_pipeline(
+        config,
+        backup=ErrorBatchExecutor(),
+        compression=FakeCompressionExecutor({}),
+        transfer=FakeTransferExecutor(_all_ok),
+        notifier=notifier,
+    )
+
+    assert len(notifier.calls) == 1
+    report = notifier.calls[0]
+    assert report.subject.startswith("[ODIN] FALLO — respaldo de ")
+    assert "Respaldo no ejecutado: no se pudo preparar el directorio de trabajo" in report.body
+    assert result.notification is not None
+
+
+def test_empty_batch_still_sends_report(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    notifier = FakeNotifier()
+
+    class EmptyBatchExecutor:
+        def run_batch_backup(self, databases: list[Any], work_dir: Path) -> BatchBackupResult:
+            return BatchBackupResult(results=[], success=False, total_duration_seconds=0.0)
+
+    result = run_pipeline(
+        config,
+        backup=EmptyBatchExecutor(),
+        compression=FakeCompressionExecutor({}),
+        transfer=FakeTransferExecutor(_all_ok),
+        notifier=notifier,
+    )
+
+    assert len(notifier.calls) == 1
+    assert "No hay bases configuradas: nada que respaldar." in notifier.calls[0].body
+    assert result.notification is not None
+
+
+def test_notification_failure_is_returned_without_raising(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    failed = NotificationResult(
+        success=False,
+        recipient="control@example.com",
+        error_message="SMTPConnectError: conexión rechazada",
+    )
+    notifier = FakeNotifier(result=failed)
+
+    result = _run_successful(config, notifier)
+
+    assert len(notifier.calls) == 1
+    assert result.backup.success is True
+    assert result.notification is failed
+
+
+def test_notifier_exception_is_contained(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    notifier = FakeNotifier(exception=RuntimeError("boom"))
+
+    result = _run_successful(config, notifier)
+
+    assert len(notifier.calls) == 1
+    assert result.backup.success is True
+    assert result.notification is not None
+    assert result.notification.success is False
+    assert result.notification.recipient == "control@example.com"
+    assert "fallo inesperado del notificador" in (result.notification.error_message or "")
+    assert "RuntimeError: boom" in (result.notification.error_message or "")
+
+
+def test_log_tail_lines_reach_the_report(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="odin")
+    config = _config(tmp_path)
+    notifier = FakeNotifier()
+
+    run_pipeline(
+        config,
+        backup=LoggingBackupExecutor([_backup_result("erp_principal")]),
+        compression=FakeCompressionExecutor(
+            {"erp_principal": _compression_result("erp_principal")}
+        ),
+        transfer=FakeTransferExecutor(_all_ok),
+        notifier=notifier,
+    )
+
+    report = notifier.calls[0]
+    assert "Últimas líneas del log" in report.body
+    assert "marca-de-cola-123456" in report.body
+
+
+def test_log_tail_disabled_with_zero_lines(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="odin")
+    config = _config(tmp_path, log_tail_lines=0)
+    notifier = FakeNotifier()
+
+    run_pipeline(
+        config,
+        backup=LoggingBackupExecutor([_backup_result("erp_principal")]),
+        compression=FakeCompressionExecutor(
+            {"erp_principal": _compression_result("erp_principal")}
+        ),
+        transfer=FakeTransferExecutor(_all_ok),
+        notifier=notifier,
+    )
+
+    assert "marca-de-cola-123456" not in notifier.calls[0].body

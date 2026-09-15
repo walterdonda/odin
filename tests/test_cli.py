@@ -34,6 +34,7 @@ from odin.cli import (
 )
 from odin.config import load_config
 from odin.log import LOG_FILENAME, LOGGER_NAME
+from odin.notify import NotificationResult, ReportMessage
 from odin.transfer import TransferResult
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -429,6 +430,39 @@ def _result(name: str, success: bool, work_dir: Path) -> BackupResult:
     )
 
 
+def _install_fake_notifier(
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: Callable[[ReportMessage], NotificationResult] | None = None,
+) -> None:
+    """Reemplaza ``EmailNotifier`` en el pipeline: éxito sin SMTP real por default.
+
+    Desde el Item 043 el pipeline envía el correo al final de cada corrida;
+    este doble evita conexiones reales y ``outcome`` permite forzar el
+    desenlace del envío (Item 044: SMTP caído).
+    """
+
+    class FakeEmailNotifier:
+        def __init__(self, smtp: Any = None, to: str = "", from_: str = "") -> None:
+            self.smtp = smtp
+            self.to = to
+            self.from_ = from_
+
+        @classmethod
+        def from_config(cls, config: Any) -> FakeEmailNotifier:
+            return cls(
+                smtp=config.notification.smtp,
+                to=config.notification.to,
+                from_=config.notification.from_,
+            )
+
+        def send(self, report: ReportMessage) -> NotificationResult:
+            if outcome is not None:
+                return outcome(report)
+            return NotificationResult(success=True, recipient=self.to, duration_seconds=0.01)
+
+    monkeypatch.setattr("odin.pipeline.EmailNotifier", FakeEmailNotifier)
+
+
 def _install_fake_executor(
     monkeypatch: pytest.MonkeyPatch,
     builder: Callable[[list[Any], Path], BatchBackupResult],
@@ -436,9 +470,9 @@ def _install_fake_executor(
     """Reemplaza ``BackupExecutor`` en la CLI por un lote controlado.
 
     Desde el Item 035 la CLI delega en ``odin.pipeline.run_pipeline``, así
-    que el doble se instala en ``odin.pipeline``. El ``TransferExecutor``
-    también se dobla (éxito silencioso por servidor) para que los tests de
-    respaldo/compresión no intenten conexiones SFTP reales.
+    que el doble se instala en ``odin.pipeline``. El ``TransferExecutor`` y el
+    ``EmailNotifier`` también se doblan (éxito silencioso) para que los tests
+    de respaldo/compresión no intenten conexiones SFTP/SMTP reales.
     """
 
     class FakeBackupExecutor:
@@ -451,6 +485,7 @@ def _install_fake_executor(
 
     monkeypatch.setattr("odin.pipeline.BackupExecutor", FakeBackupExecutor)
     _install_fake_transfer(monkeypatch)
+    _install_fake_notifier(monkeypatch)
 
 
 def _install_fake_transfer(
@@ -672,7 +707,7 @@ def test_run_encrypts_archives_when_password_configured(
 
 
 def test_run_invalid_gbak_path_exits_4_with_clear_error(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     config_path = _write_config(
         tmp_path,
@@ -680,6 +715,7 @@ def test_run_invalid_gbak_path_exits_4_with_clear_error(
             gbak_path=str(tmp_path / "no-existe" / "gbak")
         ),
     )
+    _install_fake_notifier(monkeypatch)
     assert main(["run", "--config", str(config_path)]) == EXIT_FAILURE
     captured = capsys.readouterr()
     assert "0/1 base(s) con éxito" in captured.out
@@ -859,3 +895,136 @@ def test_run_prints_transfer_failures_on_stderr(
     assert "Transferencia SFTP: 0/2 servidor(es) exitosos" in captured.out
     assert "erp_principal → sitio-alterno-1: FALLO (Connection error: refused)" in captured.err
     assert "erp_principal → sitio-alterno-2: FALLO (Connection error: refused)" in captured.err
+
+
+# --- Exit codes finales y resumen de consola con el correo (Item 044) ---
+
+
+def _successful_batch(databases: list[Any], work_dir: Path) -> BatchBackupResult:
+    """Lote con todas las bases respaldadas y comprimidas con éxito."""
+    return BatchBackupResult(
+        results=[_result(db.name, True, work_dir) for db in databases],
+        success=True,
+        total_duration_seconds=0.1,
+    )
+
+
+def _notification_outcome(
+    *, success: bool, message: str | None = None
+) -> Callable[[ReportMessage], NotificationResult]:
+    """Desenlace del envío a usar por el notifier doblado."""
+
+    def outcome(report: ReportMessage) -> NotificationResult:
+        return NotificationResult(
+            success=success,
+            recipient="control@example.com",
+            duration_seconds=0.02,
+            error_message=None if success else message,
+        )
+
+    return outcome
+
+
+def test_run_success_prints_notification_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+    _install_fake_executor(monkeypatch, _successful_batch)
+
+    assert main(["run", "--config", str(config_path)]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "Correo enviado a control@example.com" in out
+
+
+def test_run_notification_failure_exits_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+    _install_fake_executor(monkeypatch, _successful_batch)
+    _install_fake_notifier(
+        monkeypatch,
+        _notification_outcome(success=False, message="SMTPConnectError: conexión rechazada"),
+    )
+
+    assert main(["run", "--config", str(config_path)]) == EXIT_INTERNAL
+    captured = capsys.readouterr()
+    assert "1/1 base(s) con éxito" in captured.out
+    assert "Correo NO enviado: SMTPConnectError: conexión rechazada" in captured.err
+
+
+def test_run_partial_with_notification_failure_exits_3(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path, mutate=_with_second_database)
+
+    def builder(databases: list[Any], work_dir: Path) -> BatchBackupResult:
+        return BatchBackupResult(
+            results=[
+                _result("erp_principal", True, work_dir),
+                _result("erp_secundaria", False, work_dir),
+            ],
+            success=False,
+            total_duration_seconds=0.2,
+        )
+
+    _install_fake_executor(monkeypatch, builder)
+    _install_fake_notifier(
+        monkeypatch, _notification_outcome(success=False, message="SMTP caído")
+    )
+
+    assert main(["run", "--config", str(config_path)]) == EXIT_PARTIAL
+    captured = capsys.readouterr()
+    assert "1/2 base(s) con éxito" in captured.out
+    assert "Correo NO enviado: SMTP caído" in captured.err
+
+
+def test_run_total_failure_precedes_notification_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+
+    def builder(databases: list[Any], work_dir: Path) -> BatchBackupResult:
+        return BatchBackupResult(
+            results=[_result(db.name, False, work_dir) for db in databases],
+            success=False,
+            total_duration_seconds=0.2,
+        )
+
+    _install_fake_executor(monkeypatch, builder)
+    _install_fake_notifier(
+        monkeypatch, _notification_outcome(success=False, message="SMTP caído")
+    )
+
+    assert main(["run", "--config", str(config_path)]) == EXIT_FAILURE
+    captured = capsys.readouterr()
+    assert "0/1 base(s) con éxito" in captured.out
+    assert "Correo NO enviado: SMTP caído" in captured.err
+
+
+def test_run_masks_notification_error_secrets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+    _install_fake_executor(monkeypatch, _successful_batch)
+    _install_fake_notifier(
+        monkeypatch,
+        _notification_outcome(
+            success=False, message="SMTPAuthenticationError: credencial masterkey rechazada"
+        ),
+    )
+
+    assert main(["run", "--config", str(config_path)]) == EXIT_INTERNAL
+    captured = capsys.readouterr()
+    assert "masterkey" not in captured.err
+    assert "***" in captured.err
+    log_path = load_config(config_path).local.resolved_log_dir / LOG_FILENAME
+    log = log_path.read_text(encoding="utf-8")
+    assert "masterkey" not in log
+    assert "Correo NO enviado" in log
+
+
+def test_run_help_mentions_email(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        main(["run", "--help"])
+    assert excinfo.value.code == 0
+    assert "correo" in capsys.readouterr().out.lower()
