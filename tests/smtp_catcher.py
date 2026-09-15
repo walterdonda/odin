@@ -111,13 +111,18 @@ class _SmtpHandler(socketserver.StreamRequestHandler):
 
 
 class SmtpCatcher(socketserver.ThreadingTCPServer):
-    """Servidor SMTP efímero en un hilo: captura lo que ODIN entrega."""
+    """Servidor SMTP efímero en un hilo: captura lo que ODIN entrega.
+
+    El bind por defecto es ``127.0.0.1``; los escenarios que corren un
+    contenedor externo pueden pedir ``0.0.0.0`` (Item 072) para que el
+    contenedor lo alcance.
+    """
 
     allow_reuse_address = True
     daemon_threads = True
 
-    def __init__(self) -> None:
-        super().__init__(("127.0.0.1", 0), _SmtpHandler)
+    def __init__(self, *, host: str = "127.0.0.1") -> None:
+        super().__init__((host, 0), _SmtpHandler)
         self.messages: list[str] = []
         self.senders: list[str] = []
         self.recipients: list[str] = []
