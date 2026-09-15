@@ -64,6 +64,7 @@ Validar el ciclo completo de desarrollo en las dos plataformas objetivo: Linux L
 > **Decisiones durante la implementación:**
 > - **Validación de Windows en Linux:** Se utilizó la capacidad del parser de detectar rutas con "sabor Windows" (`D:/Backups/odin`) para validar la lógica sin necesidad de un entorno Windows real, cumpliendo el criterio de validación de coherencia OS-agnóstica.
 > - **Verificación de dependencias:** Se utilizó `grep` sobre `uv.lock` para confirmar la presencia de wheels `cp314` para `pywin32` en plataformas `win32`, `amd64` y `arm64`, garantizando la resolución para Windows.
+> - **2026-09-15 — Linux cerrado por el Item 071:** el ciclo `uv sync` + `uv run pytest` + `odin validate` quedó automatizado en el gate único `scripts/verify.py` (evidencia en `docs/aide/items/071-script-verificacion-multiplataforma.md`). El item **no** se marca completo: la confirmación en Windows Server real queda para el Item 074 (CI del Item 073 y/o runbook §8 de `docs/service.md`).
 
 ## Recordatorio de Completado
 

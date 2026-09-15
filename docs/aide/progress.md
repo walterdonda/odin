@@ -4,7 +4,7 @@
 
 **Leyenda:** 📋 Planificado · 🚧 En progreso · ✅ Completo · ⏸️ Diferido · ❌ Excluido
 
-**Última actualización:** 2026-09-15 (Etapa 8 🚧 — Lote A cerrado: items 069-070 — `tests/firebird_container.py` (helper de contenedores por familia, `gbak` de la propia imagen vía `docker exec`, sin `gbak` en el host) y `tests/test_firebird_matrix.py` (2.5/3.0/4.0/5.0/6.0-snapshot, respaldo + restore con conteo de filas y charset: `uv run pytest tests/test_firebird_matrix.py -q -m integration -s` → **5 passed in 23.31 s**); `test_backup_integration.py`/`test_notify_integration.py` adaptados; `docs/firebird.md` con la matriz, la regla de familia, las incompatibilidades verificadas, la guía de `gbak_path` y la reproducción local; `/usr/local/firebird` sumado a `gbak_finder` con test; README enlaza la guía; gates **631 passed + 3 skipped** + ruff + mypy Success 19 files)
+**Última actualización:** 2026-09-15 (Etapa 8 🚧 — Lote B 071-072 ✅: `scripts/verify.py` como gate único (solo stdlib, `--skip-sync`/`--quick`/`--only`, 13 tests con runner inyectado, quickstart por plataforma en el README) y verificación real de empaquetado e instalación limpia en Linux LTS (`uv build` con wheel/sdist verificados, `uv tool install` aislado en host, contenedor `ubuntu:24.04` limpio y e2e gated `ODIN_CLEAN_CONTAINER_E2E=1` con Firebird 5.0 + SFTP/SMTP ephemeral; finding real corregido: `tzdata` como dependencia directa); gates **646 passed + 7 skipped in 74.35 s** + ruff + mypy Success 19 files)
 ---
 
 ## Resumen por Etapa
@@ -34,13 +34,13 @@ Estado: 🚧
 - ✅ Logging base: consola + archivo con rotación, nivel configurable, enmascarado de secretos (Item 004 ✅: `src/odin/log.py` con `setup_logging` idempotente — consola + `RotatingFileHandler` 5 MiB × 5 backups, nivel vía `LogLevel` — y `SecretMasker`/`MaskingFilter` puros reutilizables: secretos de `iter_secret_fields()` → `***` en ambos destinos, bloques PEM `PRIVATE KEY` vaciados por patrón; 30 tests en `tests/test_log.py`)
 - ✅ CLI argparse: `odin validate --config <ruta>` + variable de entorno `ODIN_CONFIG`; exit codes (0/2/1) (Item 005 ✅: `src/odin/cli.py` con subcomando `validate` cableado a `load_config` + `setup_logging` — fallo operativo de logging no invalida la config (exit 0 + advertencia) —, resolución `--config` → `ODIN_CONFIG` → error 2, constantes `EXIT_OK`/`EXIT_INTERNAL`/`EXIT_CONFIG`, errores imprevistos → 1 con traceback controlado, SystemExit de argparse preservado y punto de extensión documentado para `run`/`service`; 15 tests en `tests/test_cli.py`)
 - ✅ Ejemplos `examples/config.linux.json` y `examples/config.windows.json` (Item 007 ✅: fieles a la visión §5, charset `ISO8859_1`, secretos placeholder `***`, ambos con `odin validate` exit 0 en Linux — el de Windows omitiendo el `work_dir` por sabor distinto; `examples/README.md` con uso, seguridad (permisos 600/ACL, no versionar el JSON real) y campos opcionales con defaults; subsección "Ejemplos de configuración" en el README; 5 fixtures nuevos en `tests/fixtures/` —mínimo, rutas relativas+`~`, errores de tipo/rango/faltantes— y 16 tests en `tests/test_fixtures.py`)
-- 🚧 `uv sync` + `uv run pytest` funcionando en Linux y Windows
+- 🚧 `uv sync` + `uv run pytest` funcionando en Linux y Windows — Item 071 ✅ cierra el pendiente del **Item 009 en Linux**: `scripts/verify.py` (solo stdlib, mismo archivo en ambas plataformas) corre `uv sync` → `uv run pytest` → `ruff` → `mypy` → `odin validate` sobre los dos ejemplos con salida por paso, resumen y exit 0 solo si todo pasa (`uv run python scripts/verify.py` → EXIT=0, seis pasos OK); Windows queda con el mismo script como gate (CI/Item 074)
 
 ### Criterios de aceptación
 - [x] `uv sync && uv run odin validate --config examples/config.linux.json` → exit code 0 — verificado en Linux (Item 007): ambos ejemplos dan exit 0 con advertencias no bloqueantes (JSON en 644, `work_dir` de desarrollo no creable sin root; el ejemplo Windows además omite el `work_dir` por sabor distinto). Con `--strict` dan 2 (esperado: son plantilla). Confirmación en Windows real → Item 009
 - [x] JSON inválido produce mensajes específicos por campo (tipo, rango, ruta inexistente) — tipo/rango desde el Item 002 (`ConfigError.problems` con `field_path`); ruta inexistente/no creable desde el Item 006 (hallazgos ERROR/WARNING por campo, p. ej. `config.servers[1].auth.private_key`, `config.local.work_dir`)
 - [x] Tests unitarios de parseo, normalización de rutas y enmascarado de secretos — parseo (Item 002, `test_config.py`), normalización (Item 003, `test_paths.py`) y enmascarado (Item 004, `test_log.py`) verdes; el Item 007 suma la capa sobre archivos reales (`test_fixtures.py`: mínimo→defaults, errores→`field_path` específicos, rutas relativas/`~`→normalización, ejemplos→pasan `validate`)
-- [x] Compatibilidad de dependencias con Python 3.14 verificada y documentada (riesgo transversal) — verificada en Linux (Item 001); pendiente confirmación en Windows (Item 009)
+- [x] Compatibilidad de dependencias con Python 3.14 verificada y documentada (riesgo transversal) — verificada en Linux (Item 001; ciclo cerrado por el gate del Item 071); pendiente confirmación en Windows (Item 009, CI/Item 074)
 
 ---
 
@@ -192,15 +192,15 @@ Estado: 🚧
 
 ### Entregables
 - ✅ Matriz de pruebas Firebird (mínimo 2.5 y 5/6) con `gbak` de la familia correspondiente; guía `gbak_path` por versión (Items 069-070 ✅: `tests/firebird_container.py` —helper compartido de contenedores por familia, `gbak` de la propia imagen vía wrapper `docker exec --user root` con el `work_dir` montado en la misma ruta absoluta, sin `gbak` en el host— + `tests/test_firebird_matrix.py` parametrizado 2.5/3.0/4.0/5.0/6.0-snapshot `@integration` skip-safe que siembra con `isql`, respalda con `BackupExecutor`+`gbak_path`, valida el `.fbk` y restaura a scratch contando filas y charset; `test_backup_integration.py`/`test_notify_integration.py` adaptados al helper; matriz ejecutada con evidencia —2.5.9 LI-V2.5.9.27139 UTF8 2560 B, 3.0.9 LI-V3.0.9.33560 WIN1252, 4.0.5 LI-V4.0.5.3140 ISO8859_1, 5.0.4 LI-V5.0.4.1812 UTF8, 6.0-snapshot LI-T6.0.0.2177 UTF8, 3/3 filas restauradas en todas: `uv run pytest tests/test_firebird_matrix.py -q -m integration -s` → **5 passed in 23.31 s**—; `docs/firebird.md` con la matriz de compatibilidad, la regla de familia con las incompatibilidades verificadas (3+ ↔ 2.5 y formato de backup 1..9 vs 11), la guía de `gbak_path` (auto-detección, override, convivencia de instalaciones y ejemplos Linux/Windows), conexión/charset, reproducción local con `ODIN_FIREBIRD_*` y recomendación por despliegue; hueco real corregido: `/usr/local/firebird` (prefijo del tarball de 2.5) sumado a `gbak_finder` con test; README enlaza la guía; gates del batch: **631 passed + 3 skipped** + ruff + mypy Success 19 files)
-- 🚧 Verificación de `uv tool install` en Windows Server y Linux LTS limpios; prueba de `odin run` y del servicio
+- ✅ Verificación de `uv tool install` en Windows Server y Linux LTS limpios; prueba de `odin run` y del servicio — **Linux LTS ✅ (Items 071-072)**: `scripts/verify.py` como gate local (cierre del Item 009 en Linux) y empaquetado real verificado —`ODIN_BUILD_ARTIFACTS=1 uv run pytest tests/test_packaging.py -q` → 4 passed (wheel/sdist + `uv tool install` aislado + `odin 0.1.0`/`validate`/`service status`), capa `ubuntu:24.04` limpia (1 passed + 1 skipped) y e2e gated `ODIN_CLEAN_CONTAINER_E2E=1` → 2 passed con `odin run`, Firebird 5.0 de la matriz, SFTP/SMTP ephemeral, `.fbk`/`.fbk.7z` y correo `[ODIN] ÉXITO`; finding real: `tzdata` como dependencia directa—; **Windows Server queda para el Item 074** (job Windows de la CI del Item 073 y/o runbook §8)
 - 🚧 `README.md` completo: instalación, configuración (ejemplos por plataforma), operación, troubleshooting
 - 🚧 Guía de seguridad: permisos del JSON (600/ACL), recomendación de clave SSH, advertencia de credenciales legibles
-- 🚧 Suite de tests completa verde en Linux y Windows (CI o script de verificación)
+- ✅ Suite de tests completa verde en Linux y Windows (CI o script de verificación) — Item 071 ✅: gate único `scripts/verify.py` (solo stdlib, Linux/Windows) con `--skip-sync`/`--quick`/`--only`, `tests/test_verify_script.py` (13 tests con runner inyectado, sin `uv` real) y quickstart por plataforma en el README; evidencia `uv run python scripts/verify.py` → EXIT=0 (pytest 48.84 s); el job Windows real llega con la CI del Item 073
 - 🚧 Release/tag `1.0.0`
 
 ### Criterios de aceptación
 - [ ] Criterios de éxito 1–8 de la visión verificados con evidencia (logs/correos/salidas)
-- [ ] Instalación desde cero en ambas plataformas sin pasos fuera de la documentación
+- [ ] Instalación desde cero en ambas plataformas sin pasos fuera de la documentación — **Linux LTS ✅ (Item 072)**: host aislado y contenedor `ubuntu:24.04` limpio con el wheel, `odin --version`/`validate`/`service status` y e2e de `odin run`; falta Windows Server (Item 074/CI 073)
 - [ ] Respaldo demostrado sobre Firebird 2.5 y sobre Firebird 5 o 6
 - [ ] Documentación consistente con el comportamiento real
 
@@ -227,7 +227,7 @@ Estado: 🚧
 | G2. Compresión 7z | 🚧 | 3 |
 | G3. Distribución SFTP con reintentos | ✅ | 4 |
 | G4. Correo de trazabilidad en cada ejecución | ✅ | 5 |
-| G5. Instalación uniforme vía uv (Windows/Linux) | 🚧 | 1, 8 |
+| G5. Instalación uniforme vía uv (Windows/Linux) | 🚧 | 1, 8 (Linux ✅ 072) |
 | G6. Servicio residente con scheduler propio | ✅ | 6, 7 |
 | G7. Modo one-shot `odin run` compatible | ✅ | 2, 5 |
 
@@ -256,16 +256,18 @@ Estado: 🚧
 
 ## Próximo Paso
 
-El **Lote A** de `queue-008.md` (items 069-070) quedó cerrado: la matriz de
-integración Firebird 2.5 → 6 corre en verde con el `gbak` de cada familia
-(`uv run pytest tests/test_firebird_matrix.py -q -m integration -s` → 5 passed
-in 23.31 s, sin `gbak` en el host) y `docs/firebird.md` documenta la matriz, la
-regla de familia, las incompatibilidades verificadas, la guía de `gbak_path`
-por plataforma y la reproducción local; el hueco real de `/usr/local/firebird`
-en `gbak_finder` quedó corregido con test. La suite está en **631 passed + 3
-skipped** + ruff + mypy.
+El **Lote B** de `queue-008.md` (items 071-072) quedó cerrado: `scripts/verify.py`
+es el gate único multiplataforma (solo stdlib, `--skip-sync`/`--quick`/`--only`,
+13 tests con runner inyectado y quickstart por plataforma en el README; cierra
+el pendiente del Item 009 en Linux) y el empaquetado quedó verificado de punta
+a punta en Linux — `uv build` (wheel/sdist), `uv tool install` aislado en host,
+contenedor `ubuntu:24.04` limpio y e2e gated `ODIN_CLEAN_CONTAINER_E2E=1` con
+Firebird 5.0 de la matriz, SFTP/SMTP ephemeral y `odin run` completo—; el
+contenedor limpio destapó un hueco real (`zoneinfo` sin datos IANA) que quedó
+corregido con `tzdata` como dependencia directa. La suite está en **646 passed
++ 7 skipped in 74.35 s** + ruff + mypy Success 19 files.
 
-Sigue la **Etapa 8** con el **Lote B** de `queue-008.md` (items 071-072:
-`scripts/verify.py` como gate único y verificación real de `uv build` +
-`uv tool install` en Linux LTS limpio). Siguiente: en una **nueva sesión de
-chat** ejecutar `/speckit.aide.execute-batch 071,072`.
+Sigue la **Etapa 8** con el **Lote C** de `queue-008.md` (items 073-074: CI
+multiplataforma lista para habilitar con el job Windows real y verificación en
+limpio en Windows Server que cierra el Item 009). Siguiente: en una **nueva
+sesión de chat** ejecutar `/speckit.aide.execute-batch 073,074`.
