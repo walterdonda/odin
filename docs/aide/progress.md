@@ -4,7 +4,7 @@
 
 **Leyenda:** 📋 Planificado · 🚧 En progreso · ✅ Completo · ⏸️ Diferido · ❌ Excluido
 
-**Última actualización:** 2026-09-15 (Etapa 7 ✅ - Lote D cerrado: items 067-068 — `docs/service.md` (guía operativa del modo residente: ciclo de vida y exit codes, Linux/systemd, Windows/SCM, lectura de `status`, log y rotación, diagnóstico de fallos comunes, desinstalación limpia y runbook de Windows Server) con README actualizado (sección del modo servicio, matriz por plataforma y exit codes ampliados) y cierre de la etapa con los criterios verificados uno a uno —validación estructural de la unit, ciclo de vida Linux real por la CLI con `systemctl` doble, auto-recuperación de systemd re-verificada con la demo gated en 102.27 s, ciclo de vida Windows con dobles de pywin32 y runbook documentado—, F7/G6 en ✅ y la verificación en Windows Server real delegada a la Etapa 8/Item 009; gates 623 passed + 5 skipped + ruff + mypy Success 19 files)
+**Última actualización:** 2026-09-15 (Etapa 8 🚧 — Lote A cerrado: items 069-070 — `tests/firebird_container.py` (helper de contenedores por familia, `gbak` de la propia imagen vía `docker exec`, sin `gbak` en el host) y `tests/test_firebird_matrix.py` (2.5/3.0/4.0/5.0/6.0-snapshot, respaldo + restore con conteo de filas y charset: `uv run pytest tests/test_firebird_matrix.py -q -m integration -s` → **5 passed in 23.31 s**); `test_backup_integration.py`/`test_notify_integration.py` adaptados; `docs/firebird.md` con la matriz, la regla de familia, las incompatibilidades verificadas, la guía de `gbak_path` y la reproducción local; `/usr/local/firebird` sumado a `gbak_finder` con test; README enlaza la guía; gates **631 passed + 3 skipped** + ruff + mypy Success 19 files)
 ---
 
 ## Resumen por Etapa
@@ -191,7 +191,7 @@ completa de los criterios 1–8 de la visión es el cierre de la Etapa 8.
 Estado: 🚧
 
 ### Entregables
-- 🚧 Matriz de pruebas Firebird (mínimo 2.5 y 5/6) con `gbak` de la familia correspondiente; guía `gbak_path` por versión
+- ✅ Matriz de pruebas Firebird (mínimo 2.5 y 5/6) con `gbak` de la familia correspondiente; guía `gbak_path` por versión (Items 069-070 ✅: `tests/firebird_container.py` —helper compartido de contenedores por familia, `gbak` de la propia imagen vía wrapper `docker exec --user root` con el `work_dir` montado en la misma ruta absoluta, sin `gbak` en el host— + `tests/test_firebird_matrix.py` parametrizado 2.5/3.0/4.0/5.0/6.0-snapshot `@integration` skip-safe que siembra con `isql`, respalda con `BackupExecutor`+`gbak_path`, valida el `.fbk` y restaura a scratch contando filas y charset; `test_backup_integration.py`/`test_notify_integration.py` adaptados al helper; matriz ejecutada con evidencia —2.5.9 LI-V2.5.9.27139 UTF8 2560 B, 3.0.9 LI-V3.0.9.33560 WIN1252, 4.0.5 LI-V4.0.5.3140 ISO8859_1, 5.0.4 LI-V5.0.4.1812 UTF8, 6.0-snapshot LI-T6.0.0.2177 UTF8, 3/3 filas restauradas en todas: `uv run pytest tests/test_firebird_matrix.py -q -m integration -s` → **5 passed in 23.31 s**—; `docs/firebird.md` con la matriz de compatibilidad, la regla de familia con las incompatibilidades verificadas (3+ ↔ 2.5 y formato de backup 1..9 vs 11), la guía de `gbak_path` (auto-detección, override, convivencia de instalaciones y ejemplos Linux/Windows), conexión/charset, reproducción local con `ODIN_FIREBIRD_*` y recomendación por despliegue; hueco real corregido: `/usr/local/firebird` (prefijo del tarball de 2.5) sumado a `gbak_finder` con test; README enlaza la guía; gates del batch: **631 passed + 3 skipped** + ruff + mypy Success 19 files)
 - 🚧 Verificación de `uv tool install` en Windows Server y Linux LTS limpios; prueba de `odin run` y del servicio
 - 🚧 `README.md` completo: instalación, configuración (ejemplos por plataforma), operación, troubleshooting
 - 🚧 Guía de seguridad: permisos del JSON (600/ACL), recomendación de clave SSH, advertencia de credenciales legibles
@@ -256,22 +256,16 @@ Estado: 🚧
 
 ## Próximo Paso
 
-La **Etapa 7** quedó cerrada con el **Lote D** de `queue-007.md` (items 067-068):
-`docs/service.md` documenta la operación completa del modo residente (ciclo de
-vida, Linux/systemd, Windows/SCM, `status`, log, diagnóstico y desinstalación),
-el README tiene la sección del modo servicio con la matriz por plataforma y los
-criterios de la etapa quedaron verificados uno a uno con evidencia (unit y
-`systemd-analyze verify`, ciclo de vida Linux real por la CLI, auto-recuperación
-de systemd re-verificada en 102.27 s, ciclo de vida Windows con dobles de
-pywin32 y runbook). ODIN corre desatendido sin cron ni Task Scheduler, con
-`install|uninstall|start|stop|status`, logging persistente sin consola y
-documentación operativa; la verificación en **Windows Server real** (reinicio
-del SO y recuperación de caída) queda delegada a la **Etapa 8 (Item 009)**, con
-el runbook de `docs/service.md` §8.
+El **Lote A** de `queue-008.md` (items 069-070) quedó cerrado: la matriz de
+integración Firebird 2.5 → 6 corre en verde con el `gbak` de cada familia
+(`uv run pytest tests/test_firebird_matrix.py -q -m integration -s` → 5 passed
+in 23.31 s, sin `gbak` en el host) y `docs/firebird.md` documenta la matriz, la
+regla de familia, las incompatibilidades verificadas, la guía de `gbak_path`
+por plataforma y la reproducción local; el hueco real de `/usr/local/firebird`
+en `gbak_finder` quedó corregido con test. La suite está en **631 passed + 3
+skipped** + ruff + mypy.
 
-Sigue la **Etapa 8** de `docs/aide/roadmap.md` —matriz de versiones Firebird
-(2.5 → 5/6), empaquetado e instalación con `uv tool install`, documentación
-final, guía de seguridad y release `1.0.0`—, que se planificará en la
-`queue-008.md` (a crear con `/speckit.aide.create-queue`) y arrancará en el
-**item 069**. Siguiente: en una **nueva sesión de chat** ejecutar
-`/speckit.aide.create-queue` para generar `queue-008.md`.
+Sigue la **Etapa 8** con el **Lote B** de `queue-008.md` (items 071-072:
+`scripts/verify.py` como gate único y verificación real de `uv build` +
+`uv tool install` en Linux LTS limpio). Siguiente: en una **nueva sesión de
+chat** ejecutar `/speckit.aide.execute-batch 071,072`.
