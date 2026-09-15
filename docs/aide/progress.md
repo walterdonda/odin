@@ -4,7 +4,7 @@
 
 **Leyenda:** 📋 Planificado · 🚧 En progreso · ✅ Completo · ⏸️ Diferido · ❌ Excluido
 
-**Última actualización:** 2026-09-15 (Etapa 7 🚧 - Lote C cerrado: items 065-066 — runtime único del modo residente `ServiceRunner` (carga/validación de config, logging sin consola con stdio redirigido, store + `SchedulerService` real, `run()`/`stop()` thread-safe e idempotente y parada previa al arranque que cierra la carrera del gestor) con `_cmd_service_run` delegado, más la verificación de integración Linux en tres capas (estructura/verify de la unit, ciclo de vida real por la CLI con `systemctl` doble y demo gated de auto-recuperación de systemd verificada en 77.66 s); el Lote D de `queue-007.md` (`067,068`: `docs/service.md`, README y cierre de etapa) queda pendiente; gates 623 passed + 5 skipped + ruff + mypy Success 19 files)
+**Última actualización:** 2026-09-15 (Etapa 7 ✅ - Lote D cerrado: items 067-068 — `docs/service.md` (guía operativa del modo residente: ciclo de vida y exit codes, Linux/systemd, Windows/SCM, lectura de `status`, log y rotación, diagnóstico de fallos comunes, desinstalación limpia y runbook de Windows Server) con README actualizado (sección del modo servicio, matriz por plataforma y exit codes ampliados) y cierre de la etapa con los criterios verificados uno a uno —validación estructural de la unit, ciclo de vida Linux real por la CLI con `systemctl` doble, auto-recuperación de systemd re-verificada con la demo gated en 102.27 s, ciclo de vida Windows con dobles de pywin32 y runbook documentado—, F7/G6 en ✅ y la verificación en Windows Server real delegada a la Etapa 8/Item 009; gates 623 passed + 5 skipped + ruff + mypy Success 19 files)
 ---
 
 ## Resumen por Etapa
@@ -17,7 +17,7 @@
 | 4 | Transferencia SFTP con paramiko | ✅ |
 | 5 | Notificación por correo y flujo end-to-end one-shot | ✅ |
 | 6 | Scheduler interno | ✅ |
-| 7 | Modo servicio: Windows Service y daemon Linux | 🚧 |
+| 7 | Modo servicio: Windows Service y daemon Linux | ✅ |
 | 8 | Matriz Firebird, empaquetado uv y documentación final | 🚧 |
 
 ---
@@ -156,24 +156,33 @@ Estado: ✅
 
 ## Etapa 7 — Modo servicio: Windows Service y daemon Linux
 
-Estado: 🚧
+Estado: ✅
 
 ### Entregables
 - ✅ `src/odin/service/`: contrato portable del modo residente (Item 059 ✅: `src/odin/service/base.py` + `__init__.py` con `ServiceSpec` —`config_path` absoluta validada y `argv = <ejecutable> service run --config <ruta>`—, `ServiceStatus`, `ServiceManagerKind`, `ServiceManager` (ABC), `ServiceRuntime` (Protocol) y `ServiceError`/`ServiceUnsupportedError`/`ServiceNotInstalledError`; `create_service_manager(platform=...)` despacha con import diferido (`importlib`) sin tocar pywin32 en Linux; overrides de mypy para pywin32; 19 tests en `tests/test_service_base.py`; gates: 19 passed + ruff + mypy Success 16 files)
 - ✅ `src/odin/service/windows.py` (pywin32): `odin service install|uninstall|start|stop|status`, arranque automático, reinicio ante caída, shutdown limpio (Item 061 ✅: `src/odin/service/windows.py` con imports de pywin32 perezosos (`_import_win32` → `ServiceUnsupportedError` fuera de Windows), `OdinWindowsService` construida perezosamente y publicada por `__getattr__` —`SvcDoRun` resuelve la config fijada en la instalación (`SetServiceCustomOption("ConfigPath")`, respaldo `ODIN_CONFIG`) y `SvcStop` espera la detención limpia—, `WindowsServiceManager` con `InstallService` en `SERVICE_AUTO_START`/manual + failure actions `SC_ACTION_RESTART` a `restart_delay_seconds` y reset periódico, `uninstall` idempotente, `start`/`stop` con espera por polling y `status` con auto-start/política de reinicio; 31 tests con dobles de pywin32. Item 062 ✅: CLI `install|uninstall|start|stop` — `install` exige `--config`/`ODIN_CONFIG`, valida el entorno (`validate_config`, solo ERROR bloquea) y pasa un `ServiceSpec` absoluto con el ejecutable resuelto (`sys.argv[0]`/`shutil.which`), imprimiendo el mensaje del gestor (o la guía sin permisos) y los pasos siguientes por plataforma; `uninstall|start|stop` operan por nombre fijo con `--config` opcional y capturan `ServiceError` → 1; 17 tests nuevos en `tests/test_cli.py`; gates: 88 passed en test_cli + ruff + mypy Success 18 files)
-- 🚧 Linux: `deploy/odin.service` de referencia (systemd `Restart=always`) + guía; comportamiento de `install/uninstall` en Linux documentado (Item 060 ✅: `src/odin/service/linux.py` con `render_unit` puro —`ExecStart` absoluto sin shell, quoting systemd, `Restart=always`/`no`, `User=`/`Group=` opcionales desde `account`— y `LinuxServiceManager` sobre `systemctl` inyectable: `install` escribe la unit + `daemon-reload` + `enable` con permisos y devuelve la guía textual sin ellos, `uninstall` idempotente, `start`/`stop` y `status` mapeando `show` (`is-active`/`is-enabled` de respaldo) a `ServiceStatus`; `deploy/odin.service` con placeholders documentados; 23 tests en `tests/test_service_linux.py`; gates: 42 passed + ruff + mypy Success 17 files)
+- ✅ Linux: `deploy/odin.service` de referencia (systemd `Restart=always`) + guía; comportamiento de `install/uninstall` en Linux documentado (Item 060 ✅: `src/odin/service/linux.py` con `render_unit` puro —`ExecStart` absoluto sin shell, quoting systemd, `Restart=always`/`no`, `User=`/`Group=` opcionales desde `account`— y `LinuxServiceManager` sobre `systemctl` inyectable: `install` escribe la unit + `daemon-reload` + `enable` con permisos y devuelve la guía textual sin ellos, `uninstall` idempotente, `start`/`stop` y `status` mapeando `show` (`is-active`/`is-enabled` de respaldo) a `ServiceStatus`; `deploy/odin.service` con placeholders documentados; 23 tests en `tests/test_service_linux.py`; gates: 42 passed + ruff + mypy Success 17 files)
 - ✅ `odin service status` completo: estado del servicio, última ejecución, próximo disparo, errores recientes (Item 063 ✅: `render_platform_status` puro en `service/base.py` —encabezado del gestor (`systemd`/`windows`), estado instalado/en ejecución/detenido, arranque automático y política de reinicio en tres estados, sugerencias `odin service install`/`odin service start`— compuesto con `render_service_status`; `_cmd_service_status` consulta el gestor real (ruta absoluta, `manager_factory` inyectable) y degrada un `ServiceError` a advertencia conservando el exit 0; 7 tests en `tests/test_service_status.py` + 6 en `tests/test_cli.py`; gates: 120 passed + ruff + mypy Success 18 files)
 - ✅ Logging persistente del servicio con rotación (sin depender de consola) (Item 064 ✅: `setup_logging(config, console=False)` deja un único `RotatingFileHandler` 5 MiB × 5 backups con nivel y `MaskingFilter`, sin `StreamHandler`, e idempotente entre recargas; `redirect_stdio_to_log(path)` redirige `sys.stdout`/`sys.stderr` a `odin.log` durante el bloque, restaura ambos al salir (incluso con excepción) y descarta el texto si el destino no es escribible; `odin service run` en primer plano conserva la consola; 9 tests nuevos en `tests/test_log.py` (50 passed))
 - ✅ Runner compartido del modo residente (Item 065 ✅: `src/odin/service/runner.py` con `ServiceRunner` —carga/validación de la config, logging sin consola con stdio redirigido, store + `SchedulerService` real y `run()`/`stop()` thread-safe e idempotente—, parada previa al arranque en `SchedulerService` (cierra la carrera arranque/parada del gestor), delegación de `_cmd_service_run` en el runner conservando señales/exit codes/estado y fábrica `build_scheduler_service` compartida con la CLI; 13 tests en `tests/test_service_runner.py`; gates: 150 passed en cli/scheduler + 61 passed + 1 skipped en servicio + ruff + mypy Success 19 files)
 - ✅ Verificación de integración del modo servicio Linux y runbook Windows (Item 066 ✅: `tests/test_service_linux_integration.py` con tres capas skip-safe —estructura de `deploy/odin.service` y `systemd-analyze verify` de la unit renderizada con ejecutable real (verify de la referencia saltado por placeholder, con motivo), ciclo de vida real de la CLI `install|start|status|stop|uninstall` contra `LinuxServiceManager` real con `systemctl` doble (secuencia exacta de comandos y exit 0/1) y demo gated `ODIN_SERVICE_DEMO=1` con unit temporal de usuario `Restart=always`: ciclo ÉXITO por el catcher SMTP, `kill -9` → systemd reinicia solo (MainPID nuevo) → segundo ciclo y limpieza total—; evidencia: 4 passed + 2 skipped por defecto y demo real **1 passed in 77.66 s** con sesión `systemctl --user`; el arranque en boot y Windows Server real quedan como procedimiento manual/runbook de `docs/service.md`, Item 067, para la Etapa 8/Item 009)
-- 🚧 `docs/service.md`: instalación, permisos (admin/root), arranque en boot, diagnóstico
+- ✅ `docs/service.md`: instalación, permisos (admin/root), arranque en boot, diagnóstico (Item 067 ✅: guía operativa completa —visión general, ciclo de vida con exit codes, Linux (unit de referencia, `daemon-reload`/`enable`, root vs usuario dedicado, recarga por `SIGUSR1`/archivo de control), Windows Server (consola elevada, arranque automático, failure actions de reinicio, cuenta y accesos, recarga por archivo de control, Visor de eventos), lectura de `odin service status` con salidas reales, log `<resolved_log_dir>/odin.log` con rotación 5 MiB × 5, diagnóstico de fallos comunes, desinstalación limpia y runbook de verificación en Windows Server real—; README con sección del modo servicio, matriz por plataforma, enlace a la guía y tabla de exit codes ampliada; sin cambios de código —la ayuda de la CLI ya estaba al día—; gates 623 passed + 5 skipped + ruff + mypy Success 19 files)
+- ✅ Cierre de la Etapa 7 (Item 068 ✅: criterios verificados uno a uno con evidencia —unit y `systemd-analyze verify`, ciclo de vida Linux real por la CLI, auto-recuperación de systemd re-verificada en **102.27 s**, ciclo de vida Windows con 31 tests de dobles de pywin32, `status` compuesto (99 passed en status+cli) y validación de la unit systemd—; gates finales **623 passed + 5 skipped** + ruff + mypy Success 19 files; F7/G6 en ✅, C8 cubierto con la salvedad de Windows real y `queue-008.md` anunciada desde el item 069)
 
 ### Criterios de aceptación
-- [ ] Windows Server: servicio instalado y arrancado sobrevive reinicio del SO; caída recuperada automáticamente
-- [ ] Linux LTS: unit systemd activa el proceso en boot y lo reinicia ante caída
-- [ ] Scheduler dispara según horario sin intervención externa en ambas plataformas
-- [ ] `odin service status` refleja estado real en ambas plataformas
-- [ ] Tests de ciclo de vida (mock `win32serviceutil`) y validación de la unit systemd
+- [x] Windows Server: servicio instalado y arrancado sobrevive reinicio del SO; caída recuperada automáticamente — ciclo de vida completo con dobles de `win32serviceutil`/`win32service` (Item 061: `InstallService` en `SERVICE_AUTO_START`, failure actions `SC_ACTION_RESTART` a los 5 s, `uninstall` idempotente, `start`/`stop` con espera y `status` con auto-start/política; 31 tests) y runbook de verificación en Windows Server real documentado en `docs/service.md` §8 (Item 067), a ejecutar en la Etapa 8/Item 009 —misma salvedad que la Etapa 1—; `uv run pytest tests/test_service_windows.py -q` → 31 passed
+- [x] Linux LTS: unit systemd activa el proceso en boot y lo reinicia ante caída — validación estructural de `deploy/odin.service` y `systemd-analyze verify` de la unit renderizada con ejecutable real (Item 066, capa 1), arranque activado con `systemctl enable` + `WantedBy=multi-user.target` (Item 060) y auto-recuperación real re-verificada con la demo gated: ciclo ÉXITO por catcher SMTP, `kill -9` → systemd reinicia solo (MainPID nuevo) → segundo ciclo, `ODIN_SERVICE_DEMO=1 uv run pytest tests/test_service_linux_integration.py::test_user_service_restarts_after_kill_and_delivers_cycles -q` → **1 passed in 102.27 s**; el reinicio del SO queda como procedimiento manual (runbook §8)
+- [x] Scheduler dispara según horario sin intervención externa en ambas plataformas — el parser/trigger cron está cubierto por los Items 049-051 y 057 (demo con cron real `* * * * *`: 2 ciclos en 78.6 s) y el modo residente lo ejecuta el mismo `ServiceRunner` compartido (Item 065): en la demo gated de systemd los dos ciclos los disparó el servicio sin intervención; `uv run pytest tests/test_service_runner.py tests/test_scheduler.py -q` → 54 passed (incluye reloj falso y solapamiento)
+- [x] `odin service status` refleja estado real en ambas plataformas — `render_platform_status` compone el estado del gestor (`systemctl show` en Linux, `QueryServiceStatus`/`QueryServiceConfig` en Windows vía dobles) con `render_service_status` (pid vivo/obsoleto, jobs, próximo disparo, salud, errores); 7 tests en `tests/test_service_status.py` y 6 en `tests/test_cli.py` cubren las combinaciones (no instalado, detenido, corriendo, estado obsoleto, sin estado, gestor caído → exit 0 con advertencia); `uv run pytest tests/test_service_status.py tests/test_cli.py -q` → 99 passed
+- [x] Tests de ciclo de vida (mock `win32serviceutil`) y validación de la unit systemd — `tests/test_service_windows.py` (31 tests con dobles de pywin32: params de `InstallService`, failure actions, espera en stop, mapeo de `status`, uninstall idempotente) y `tests/test_service_linux_integration.py` (4 passed + 2 skipped por defecto: estructura de la unit, verify real y ciclo CLI `install → start → status → stop → uninstall` con `systemctl` doble); suite de servicio completa: `uv run pytest tests/test_service_base.py tests/test_service_linux.py tests/test_service_windows.py tests/test_service_status.py tests/test_service_runner.py tests/test_service_linux_integration.py -q` → **97 passed + 2 skipped**
+
+**C8 (criterio de éxito 8 de la visión):** cubierto por esta etapa —servicio
+residente con scheduler propio sin cron ni Task Scheduler, recuperación
+automática ante caída (demo systemd re-verificada) y solapamiento controlado
+(Items 051/054)—, con el reinicio del SO en Windows Server real delegado al
+runbook de `docs/service.md` §8 en la Etapa 8 (Item 009). No se ajusta una
+tabla C en `progress.md` (no existe para las etapas previas): la verificación
+completa de los criterios 1–8 de la visión es el cierre de la Etapa 8.
 
 ---
 
@@ -207,7 +216,7 @@ Estado: 🚧
 | F4. Transferencia SFTP con paramiko (reintentos, verificación) | ✅ | 4 |
 | F5. Notificación por correo (siempre, sin secretos) | ✅ | 5 |
 | F6. CLI y operación (`run`, `validate`, `service`, exit codes, logging) | 🚧 | 1, 5, 7 |
-| F7. Scheduler propio + modo servicio residente | 🚧 | 6, 7 |
+| F7. Scheduler propio + modo servicio residente | ✅ | 6, 7 |
 | F8. Retención local | ✅ | 5 |
 
 ## Objetivos de la Visión (G1–G7)
@@ -219,7 +228,7 @@ Estado: 🚧
 | G3. Distribución SFTP con reintentos | ✅ | 4 |
 | G4. Correo de trazabilidad en cada ejecución | ✅ | 5 |
 | G5. Instalación uniforme vía uv (Windows/Linux) | 🚧 | 1, 8 |
-| G6. Servicio residente con scheduler propio | 🚧 | 6, 7 |
+| G6. Servicio residente con scheduler propio | ✅ | 6, 7 |
 | G7. Modo one-shot `odin run` compatible | ✅ | 2, 5 |
 
 ## Requisitos No Funcionales
@@ -247,15 +256,22 @@ Estado: 🚧
 
 ## Próximo Paso
 
-La **Etapa 7** avanzó con el **Lote C** de `queue-007.md` (items 065-066): el
-modo residente ya tiene un runtime único (`ServiceRunner`) que comparten el
-primer plano, la unit systemd y el `SvcDoRun` de Windows —parada limpia e
-idempotente desde el hilo del gestor, logging sin consola con stdio redirigido
-y estado final persistido— y una verificación de integración de tres capas que
-demuestra la auto-recuperación real de systemd (`Restart=always` tras un
-`kill -9`) además del ciclo de vida completo por la CLI.
+La **Etapa 7** quedó cerrada con el **Lote D** de `queue-007.md` (items 067-068):
+`docs/service.md` documenta la operación completa del modo residente (ciclo de
+vida, Linux/systemd, Windows/SCM, `status`, log, diagnóstico y desinstalación),
+el README tiene la sección del modo servicio con la matriz por plataforma y los
+criterios de la etapa quedaron verificados uno a uno con evidencia (unit y
+`systemd-analyze verify`, ciclo de vida Linux real por la CLI, auto-recuperación
+de systemd re-verificada en 102.27 s, ciclo de vida Windows con dobles de
+pywin32 y runbook). ODIN corre desatendido sin cron ni Task Scheduler, con
+`install|uninstall|start|stop|status`, logging persistente sin consola y
+documentación operativa; la verificación en **Windows Server real** (reinicio
+del SO y recuperación de caída) queda delegada a la **Etapa 8 (Item 009)**, con
+el runbook de `docs/service.md` §8.
 
-Queda el **Lote D** de `queue-007.md`: `067,068` (`docs/service.md`, README del
-modo residente, runbook de Windows Server y cierre de la Etapa 7 con los gates
-de calidad y las tablas F7/G6) hasta cerrar la Etapa 7. Siguiente: en una
-**nueva sesión de chat** ejecutar `/speckit.aide.execute-batch 067,068`.
+Sigue la **Etapa 8** de `docs/aide/roadmap.md` —matriz de versiones Firebird
+(2.5 → 5/6), empaquetado e instalación con `uv tool install`, documentación
+final, guía de seguridad y release `1.0.0`—, que se planificará en la
+`queue-008.md` (a crear con `/speckit.aide.create-queue`) y arrancará en el
+**item 069**. Siguiente: en una **nueva sesión de chat** ejecutar
+`/speckit.aide.create-queue` para generar `queue-008.md`.
