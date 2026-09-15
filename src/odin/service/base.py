@@ -21,6 +21,8 @@ Contenido:
 - ``ServiceManager`` (ABC): ``install(spec)``, ``uninstall()``, ``start()``,
   ``stop()`` y ``status()``; las operaciones de ciclo de vida devuelven el
   mensaje listo para imprimir en la CLI.
+- ``render_platform_status``: composición del estado del gestor del SO con el
+  estado del scheduler ya renderizado para ``odin service status`` (Item 063).
 - ``ServiceRuntime`` (Protocol): contrato ``run()``/``stop()`` que el runner
   del Item 065 implementará y que el ``SvcDoRun``/``SvcStop`` de Windows
   consume.
@@ -58,6 +60,7 @@ __all__ = [
     "ServiceUnsupportedError",
     "create_service_manager",
     "ensure_absolute_config_path",
+    "render_platform_status",
 ]
 
 SERVICE_NAME = "odin"
@@ -181,6 +184,64 @@ class ServiceStatus:
     ) -> ServiceStatus:
         """Estado canónico de un servicio no instalado."""
         return cls(installed=False, manager=manager, detail=detail)
+
+
+def _manager_label(manager: ServiceManagerKind | None) -> str:
+    """Nombre legible del gestor (``systemd``/``windows``/``desconocido``)."""
+    return manager.value if manager is not None else "desconocido"
+
+
+def _tri_state(value: bool | None) -> str:
+    """Booleano de tres estados para la presentación (``None`` = desconocido)."""
+    if value is None:
+        return "desconocido"
+    return "sí" if value else "no"
+
+
+def render_platform_status(
+    status: ServiceStatus | None,
+    scheduler_report: str,
+    *,
+    warning: str | None = None,
+) -> str:
+    """Compone el estado del servicio del SO con el del scheduler (Item 063).
+
+    Función pura de presentación para ``odin service status``: encabezado del
+    servicio en el gestor de la plataforma (instalado/corriendo, arranque
+    automático, política de reinicio y detalle) y, debajo, la sección del
+    scheduler que ya renderizó ``odin.scheduler.render_service_status``
+    (última ejecución por job, próximo disparo, salud y errores recientes).
+
+    Un ``status`` ``None`` acompaña a ``warning`` (la consulta al gestor falló):
+    el encabezado reporta la advertencia y la sección del scheduler se imprime
+    igual — el comando no deja de ser una consulta por un gestor caído. El
+    servicio no instalado sugiere ``odin service install`` y el detenido
+    ``odin service start``.
+    """
+    lines: list[str] = []
+    if warning is not None:
+        lines.append(f"Servicio del SO: no se pudo consultar el gestor ({warning}).")
+    elif status is None:
+        lines.append("Servicio del SO: estado desconocido (el gestor no informó nada).")
+    elif not status.installed:
+        lines.append(f"Servicio del SO ({_manager_label(status.manager)}): no instalado.")
+        lines.append(
+            "Sugerencia: instale el servicio residente con "
+            "'odin service install --config <ruta>'."
+        )
+    else:
+        state = "en ejecución" if status.running else "instalado y detenido"
+        lines.append(f"Servicio del SO ({_manager_label(status.manager)}): {state}.")
+        lines.append(f"  Arranque automático: {_tri_state(status.auto_start)}")
+        lines.append(f"  Reinicio ante caída: {_tri_state(status.restart_on_failure)}")
+        if status.detail:
+            lines.append(f"  Detalle: {status.detail}")
+        if not status.running:
+            lines.append("Sugerencia: arranque el servicio con 'odin service start'.")
+    lines.append("")
+    lines.append("Scheduler:")
+    lines.append(scheduler_report)
+    return "\n".join(lines)
 
 
 class ServiceManager(ABC):

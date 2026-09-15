@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import posixpath
+import shutil
 import signal
 import sys
 from collections.abc import Callable, Iterator, Sequence
@@ -34,6 +35,7 @@ from odin.cli import (
     EXIT_OK,
     EXIT_PARTIAL,
     _reload_signal,
+    _service_executable,
     _stop_signals,
     main,
 )
@@ -47,6 +49,13 @@ from odin.scheduler import (
     SchedulerStateStore,
     load_state,
     state_path,
+)
+from odin.service import (
+    ServiceError,
+    ServiceManagerKind,
+    ServiceSpec,
+    ServiceStatus,
+    ServiceUnsupportedError,
 )
 from odin.transfer import TransferResult
 
@@ -1223,9 +1232,8 @@ def test_service_without_action_exits_2_with_usage(
 ) -> None:
     assert main(["service"]) == EXIT_CONFIG
     err = capsys.readouterr().err
-    assert "run" in err
-    assert "status" in err
-    assert "reload" in err
+    for action in ("run", "status", "reload", "install", "uninstall", "start", "stop"):
+        assert action in err
 
 
 def test_service_run_missing_config_source_exits_2(
@@ -1474,3 +1482,362 @@ def test_reload_signal_requests_reload_and_restores_handler() -> None:
         handler(signal.SIGUSR1, None)
     assert service.reload_requests == 1
     assert signal.getsignal(signal.SIGUSR1) is previous
+
+
+# --- Item 062: service install|uninstall|start|stop ---
+
+
+class _FakeServiceManager:
+    """Gestor doble: registra specs/acciones y puede fallar a voluntad."""
+
+    manager = ServiceManagerKind.SYSTEMD
+
+    def __init__(
+        self,
+        config_path: Path | str,
+        *,
+        error: Exception | None = None,
+        status: ServiceStatus | None = None,
+    ) -> None:
+        self.config_path = Path(config_path)
+        self.error = error
+        self.status_result = status
+        self.installed_specs: list[ServiceSpec] = []
+        self.calls: list[str] = []
+
+    def _fail_if_configured(self) -> None:
+        if self.error is not None:
+            raise self.error
+
+    def install(self, spec: ServiceSpec) -> str:
+        self._fail_if_configured()
+        self.installed_specs.append(spec)
+        return f"Servicio instalado: {spec.name}"
+
+    def uninstall(self) -> str:
+        self._fail_if_configured()
+        self.calls.append("uninstall")
+        return "Servicio desinstalado (odin)."
+
+    def start(self) -> str:
+        self._fail_if_configured()
+        self.calls.append("start")
+        return "Servicio arrancado (odin)."
+
+    def stop(self) -> str:
+        self._fail_if_configured()
+        self.calls.append("stop")
+        return "Servicio detenido (odin)."
+
+    def status(self) -> ServiceStatus:
+        self._fail_if_configured()
+        if self.status_result is not None:
+            return self.status_result
+        return ServiceStatus.not_installed(self.manager)
+
+
+def _install_fake_manager(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    error: Exception | None = None,
+    status: ServiceStatus | None = None,
+) -> list[_FakeServiceManager]:
+    """Reemplaza el gestor real del CLI por dobles que registran su uso."""
+    created: list[_FakeServiceManager] = []
+
+    def factory(config_path: Path | str, **kwargs: Any) -> _FakeServiceManager:
+        manager = _FakeServiceManager(config_path, error=error, status=status)
+        created.append(manager)
+        return manager
+
+    monkeypatch.setattr("odin.cli.create_service_manager", factory)
+    return created
+
+
+def test_service_install_missing_config_exits_2_without_manager(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    created = _install_fake_manager(monkeypatch)
+    assert main(["service", "install"]) == EXIT_CONFIG
+    assert "No se indicó el archivo de configuración" in capsys.readouterr().err
+    assert created == []
+
+
+def test_service_install_invalid_config_exits_2_without_installing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+    config_path.write_text("{esto no es json", encoding="utf-8")
+    created = _install_fake_manager(monkeypatch)
+
+    assert main(["service", "install", "--config", str(config_path)]) == EXIT_CONFIG
+    assert "JSON malformado" in capsys.readouterr().err
+    assert created == []
+
+
+def test_service_install_environment_errors_exit_2_without_installing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    blocker = tmp_path / "no-es-directorio"
+    blocker.write_text("archivo regular", encoding="utf-8")
+    config_path = _write_config(tmp_path, work_dir=blocker)
+    created = _install_fake_manager(monkeypatch)
+
+    assert main(["service", "install", "--config", str(config_path)]) == EXIT_CONFIG
+    assert "config.local.work_dir" in capsys.readouterr().err
+    assert created == []
+
+
+def test_service_install_passes_absolute_spec_and_prints_next_steps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+    executable = tmp_path / "bin" / "odin"
+    executable.parent.mkdir()
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr("odin.cli._service_executable", lambda: str(executable))
+    created = _install_fake_manager(monkeypatch)
+
+    assert main(["service", "install", "--config", str(config_path)]) == EXIT_OK
+    out = capsys.readouterr().out
+    manager = created[0]
+    assert manager.config_path == config_path.absolute()
+    spec = manager.installed_specs[0]
+    assert spec.config_path == config_path.absolute()
+    assert spec.config_path.is_absolute()
+    assert spec.executable == str(executable)
+    assert "Servicio instalado: odin" in out
+    assert "odin service start" in out
+    assert "systemctl" in out
+
+
+def test_service_install_manager_error_exits_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+    created = _install_fake_manager(monkeypatch, error=ServiceError("systemctl no disponible"))
+
+    assert main(["service", "install", "--config", str(config_path)]) == EXIT_INTERNAL
+    err = capsys.readouterr().err
+    assert "No se pudo instalar el servicio" in err
+    assert "systemctl no disponible" in err
+    assert created[0].installed_specs == []
+
+
+def test_service_install_unsupported_platform_exits_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+
+    def factory(config_path: Path | str, **kwargs: Any) -> None:
+        raise ServiceUnsupportedError("plataforma no soportada por el modo servicio")
+
+    monkeypatch.setattr("odin.cli.create_service_manager", factory)
+
+    assert main(["service", "install", "--config", str(config_path)]) == EXIT_INTERNAL
+    assert "plataforma no soportada" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("action", "message"),
+    [
+        ("uninstall", "Servicio desinstalado (odin)."),
+        ("start", "Servicio arrancado (odin)."),
+        ("stop", "Servicio detenido (odin)."),
+    ],
+)
+def test_service_lifecycle_returns_0_and_prints_manager_message(
+    action: str,
+    message: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path = _write_config(tmp_path)
+    created = _install_fake_manager(monkeypatch)
+
+    assert main(["service", action, "--config", str(config_path)]) == EXIT_OK
+    assert message in capsys.readouterr().out
+    assert created[0].calls == [action]
+    assert created[0].config_path == config_path.absolute()
+
+
+def test_service_lifecycle_without_config_uses_absolute_placeholder(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    created = _install_fake_manager(monkeypatch)
+
+    assert main(["service", "stop"]) == EXIT_OK
+    assert "Servicio detenido" in capsys.readouterr().out
+    assert created[0].config_path.is_absolute()
+
+
+@pytest.mark.parametrize("action", ["uninstall", "start", "stop"])
+def test_service_lifecycle_manager_error_exits_1(
+    action: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path = _write_config(tmp_path)
+    _install_fake_manager(monkeypatch, error=ServiceError("operación no disponible"))
+
+    assert main(["service", action, "--config", str(config_path)]) == EXIT_INTERNAL
+    err = capsys.readouterr().err
+    assert "No se pudo" in err
+    assert "operación no disponible" in err
+
+
+def test_service_executable_prefers_existing_argv0(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = tmp_path / "odin"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", [str(executable)])
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/odin")
+    assert _service_executable() == str(executable.resolve())
+
+
+def test_service_executable_falls_back_to_path_lookup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = tmp_path / "odin"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["odin-inexistente"])
+    monkeypatch.setattr(shutil, "which", lambda name: str(executable))
+    assert _service_executable() == str(executable.resolve())
+
+
+def test_service_executable_last_resort_is_bare_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "argv", [])
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    assert _service_executable() == "odin"
+
+
+def test_service_help_lists_lifecycle_actions(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        main(["service", "--help"])
+    assert excinfo.value.code == 0
+    out = capsys.readouterr().out
+    for action in ("install", "uninstall", "start", "stop"):
+        assert action in out
+
+
+# --- Item 063: service status completo (gestor del SO + scheduler) ---
+
+
+def test_service_status_composes_platform_and_scheduler(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+    _write_service_state(config_path, pid=os.getpid())
+    _install_fake_manager(
+        monkeypatch,
+        status=ServiceStatus(
+            installed=True,
+            running=True,
+            auto_start=True,
+            restart_on_failure=True,
+            manager=ServiceManagerKind.SYSTEMD,
+            detail="LoadState=loaded, ActiveState=active",
+        ),
+    )
+
+    assert main(["service", "status", "--config", str(config_path)]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "Servicio del SO (systemd): en ejecución" in out
+    assert "Arranque automático: sí" in out
+    assert "Reinicio ante caída: sí" in out
+    assert "Detalle: LoadState=loaded, ActiveState=active" in out
+    assert "Scheduler:" in out
+    assert "Servicio ODIN: en ejecución (pid " in out
+    assert "job-0 [erp_principal] schedule '0 2 * * *'" in out
+    assert "masterkey" not in out
+    assert "remote-secret-1" not in out
+    assert "smtp-secret" not in out
+
+
+def test_service_status_not_installed_suggests_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+    _install_fake_manager(
+        monkeypatch,
+        status=ServiceStatus.not_installed(
+            ServiceManagerKind.SYSTEMD, detail="LoadState=not-found"
+        ),
+    )
+
+    assert main(["service", "status", "--config", str(config_path)]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "Servicio del SO (systemd): no instalado" in out
+    assert "odin service install" in out
+    assert "Servicio ODIN: sin estado" in out
+
+
+def test_service_status_stopped_platform_suggests_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+    _write_service_state(config_path, pid=os.getpid())
+    _install_fake_manager(
+        monkeypatch,
+        status=ServiceStatus(
+            installed=True,
+            running=False,
+            auto_start=True,
+            restart_on_failure=False,
+            manager=ServiceManagerKind.SYSTEMD,
+        ),
+    )
+
+    assert main(["service", "status", "--config", str(config_path)]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "instalado y detenido" in out
+    assert "odin service start" in out
+    assert "Servicio ODIN: en ejecución" in out
+
+
+def test_service_status_running_platform_with_stale_state_is_visible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    if sys.platform.startswith("win"):
+        pytest.skip("la vigencia del pid no se verifica en Windows")
+    config_path = _write_config(tmp_path)
+    _write_service_state(config_path, pid=DEAD_PID)
+    _install_fake_manager(
+        monkeypatch,
+        status=ServiceStatus(
+            installed=True, running=True, manager=ServiceManagerKind.SYSTEMD
+        ),
+    )
+
+    assert main(["service", "status", "--config", str(config_path)]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "Servicio del SO (systemd): en ejecución" in out
+    assert f"Servicio ODIN: detenido (pid {DEAD_PID} ya no está en ejecución)" in out
+
+
+def test_service_status_manager_error_is_warning_with_exit_0(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+    _write_service_state(config_path, pid=os.getpid())
+    _install_fake_manager(monkeypatch, error=ServiceError("systemctl no disponible"))
+
+    assert main(["service", "status", "--config", str(config_path)]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "no se pudo consultar el gestor (systemctl no disponible)" in out
+    assert "Servicio ODIN: en ejecución" in out
+
+
+def test_service_status_manager_receives_absolute_config_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = _write_config(tmp_path)
+    created = _install_fake_manager(monkeypatch)
+
+    assert main(["service", "status", "--config", str(config_path)]) == EXIT_OK
+    assert created[0].config_path == config_path.absolute()

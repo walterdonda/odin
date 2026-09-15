@@ -22,6 +22,7 @@ from odin.service.base import (
     ServiceUnsupportedError,
     create_service_manager,
     ensure_absolute_config_path,
+    render_platform_status,
 )
 
 __all__ = [
@@ -39,4 +40,5 @@ __all__ = [
     "ServiceUnsupportedError",
     "create_service_manager",
     "ensure_absolute_config_path",
+    "render_platform_status",
 ]

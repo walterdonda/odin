@@ -1,17 +1,23 @@
-"""Logging de ODIN: consola + archivo con rotación y enmascarado de secretos (Item 004).
+"""Logging de ODIN: archivo con rotación, consola opcional y enmascarado (Items 004 y 064).
 
 Solo stdlib (``logging``, ``logging.handlers``, ``re``, ``pathlib``).
-``setup_logging`` configura el logger ``odin`` con dos handlers: consola
-(``StreamHandler``) y archivo (``RotatingFileHandler`` sobre
-``<resolved_log_dir>/odin.log``, codificación UTF-8), ambos con formato
+``setup_logging`` configura el logger ``odin``: un ``RotatingFileHandler``
+sobre ``<resolved_log_dir>/odin.log`` (codificación UTF-8) y, con
+``console=True`` (default), un ``StreamHandler``; ambos con formato
 ``timestamp | nivel | logger | mensaje`` y nivel efectivo tomado de
-``config.local.log_level``. El directorio de logs (``local.log_dir`` o el
+``config.local.log_level``. El modo servicio residente usa ``console=False``
+(Item 064): bajo el SCM o systemd no hay handles de consola y el registro debe
+quedar solo en el archivo rotado. El directorio de logs (``local.log_dir`` o el
 default ``<work_dir>/logs``) se crea si no existe.
 
 Rotación: ``DEFAULT_MAX_BYTES`` (5 MiB) por archivo con
 ``DEFAULT_BACKUP_COUNT`` (5) backups. Defaults sensatos para respaldos
 diarios sin consumo excesivo de disco; no se exponen en el JSON para no
 sumar superficie de configuración en la Etapa 1.
+
+``redirect_stdio_to_log`` (Item 064) redirige ``sys.stdout``/``sys.stderr`` al
+log durante un bloque para que un ``print`` perdido del proceso residente no
+falle sin consola; si el archivo no es escribible el texto se descarta.
 
 Enmascarado (visión §6 Seguridad): ``SecretMasker`` es una utilidad pura
 (sin efectos secundarios al importar, no toca el logger global) que
@@ -40,10 +46,12 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 from collections import deque
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from odin.config import Config, LogLevel
 
@@ -64,6 +72,7 @@ __all__ = [
     "attach_tail_buffer",
     "capture_log_tail",
     "detach_tail_buffer",
+    "redirect_stdio_to_log",
     "setup_logging",
 ]
 
@@ -146,13 +155,19 @@ class MaskingFilter(logging.Filter):
         return True
 
 
-def setup_logging(config: Config) -> logging.Logger:
-    """Configura el logger ``odin`` con consola + archivo rotado y devuelve el logger.
+def setup_logging(config: Config, *, console: bool = True) -> logging.Logger:
+    """Configura el logger ``odin`` con archivo rotado y consola opcional.
 
     Idempotente: re-invocarla (p. ej. recarga en caliente del modo
     servicio, Etapa 6) cierra y remueve los handlers previos antes de
     crear los nuevos, sin duplicar salidas. El logger no propaga al root
     para evitar líneas duplicadas si otro componente configura el root.
+
+    ``console=True`` (default) agrega el ``StreamHandler`` histórico —lo que
+    usa ``odin service run`` en primer plano—; ``console=False`` (Item 064)
+    registra **solo** a archivo: el servicio residente corre bajo el SCM de
+    Windows o systemd, sin handles de consola. El archivo conserva la rotación
+    (5 MiB × 5 backups) y el ``MaskingFilter`` en ambos modos.
     """
     logger = logging.getLogger(LOGGER_NAME)
     for handler in list(logger.handlers):
@@ -178,14 +193,80 @@ def setup_logging(config: Config) -> logging.Logger:
     file_handler.setFormatter(formatter)
     file_handler.addFilter(masking)
 
-    stream_handler = logging.StreamHandler()
-    stream_handler.setLevel(level)
-    stream_handler.setFormatter(formatter)
-    stream_handler.addFilter(masking)
-
     logger.addHandler(file_handler)
-    logger.addHandler(stream_handler)
+    if console:
+        stream_handler = logging.StreamHandler()
+        stream_handler.setLevel(level)
+        stream_handler.setFormatter(formatter)
+        stream_handler.addFilter(masking)
+        logger.addHandler(stream_handler)
     return logger
+
+
+class _LogStream:
+    """File-like que agrega al log, o descarta el texto si no es escribible.
+
+    Lo instala ``redirect_stdio_to_log`` (Item 064): existe para que un
+    ``print`` perdido del servicio residente —sin handles de consola— no falle
+    con ``OSError``/``AttributeError``. No enmascara secretos: esa barrera es
+    responsabilidad de los handlers del logger (``MaskingFilter``).
+    """
+
+    def __init__(self, path: Path) -> None:
+        self._path = Path(path)
+
+    def write(self, text: str) -> int:
+        """Agrega ``text`` al archivo; si no se puede, lo descarta en silencio."""
+        if not text:
+            return 0
+        try:
+            with open(self._path, "a", encoding="utf-8") as handle:
+                handle.write(text)
+        except OSError:
+            pass
+        return len(text)
+
+    def writelines(self, lines: Iterable[str]) -> None:
+        for line in lines:
+            self.write(line)
+
+    def flush(self) -> None:
+        """No-op: cada ``write`` abre y cierra el archivo."""
+
+    def isatty(self) -> bool:
+        return False
+
+    @property
+    def encoding(self) -> str:
+        return "utf-8"
+
+    @property
+    def errors(self) -> str:
+        return "replace"
+
+
+@contextmanager
+def redirect_stdio_to_log(path: Path | str) -> Iterator[Path]:
+    """Redirige ``sys.stdout``/``sys.stderr`` al log durante el bloque (Item 064).
+
+    Reemplaza ambos streams por un writer que agrega al archivo indicado
+    (típicamente ``<resolved_log_dir>/odin.log``) y los restaura al salir,
+    incluso ante excepción. Es la red de seguridad del servicio residente:
+    bajo el SCM de Windows o systemd no hay handles de consola y un ``print``
+    perdido no debe tumbar el proceso. Si el archivo no es escribible
+    (``OSError``), el writer descarta el texto (sumidero seguro). Devuelve la
+    ruta objetivo.
+    """
+    target = Path(path)
+    writer = _LogStream(target)
+    previous_out, previous_err = sys.stdout, sys.stderr
+    sys.stdout = writer
+    sys.stderr = writer
+    try:
+        yield target
+    finally:
+        sys.stdout = previous_out
+        sys.stderr = previous_err
 
 
 class TailBufferHandler(logging.Handler):

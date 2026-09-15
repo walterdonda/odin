@@ -21,19 +21,26 @@ log y en el resumen, y degrada el exit code 0 a 1. Después del correo corre la
 retención local (``odin.retention.RetentionExecutor``, Item 046): es una
 función secundaria cuyos errores se reportan pero no alteran el exit code.
 
-Subcomando ``service`` (Items 053 y 055): ``run`` arranca el scheduler interno
-en primer plano (``odin.scheduler.SchedulerService``) con el estado consultable
-en ``local.work_dir/scheduler_state.json``; ``SIGINT``/``SIGTERM`` detienen
-limpio (shutdown + estado final) con exit 0. ``status`` lee ese estado y
-presenta última ejecución, próximo disparo, salud y errores recientes; es una
+Subcomando ``service`` (Items 053, 055 y 062): ``run`` arranca el scheduler
+interno en primer plano (``odin.scheduler.SchedulerService``) con el estado
+consultable en ``local.work_dir/scheduler_state.json``; ``SIGINT``/``SIGTERM``
+detienen limpio (shutdown + estado final) con exit 0. ``status`` lee ese estado
+y presenta última ejecución, próximo disparo, salud y errores recientes; es una
 consulta: devuelve 0 mientras la lectura sea posible, con aviso si el proceso
 ya no corre o no hay estado. ``reload`` pide la recarga en caliente de la
 configuración: en POSIX envía ``SIGUSR1`` al pid del estado (el servicio lo
 procesa con el job ``reload-watcher``, valida la config nueva y conserva la
 vigente si es inválida) y sin señales (Windows) crea el archivo de control
 ``local.work_dir/scheduler_reload.request`` que el servicio consume; devuelve 1
-si no hay servicio en ejecución. El modo servicio del SO (install/start/stop)
-llega en la Etapa 7.
+si no hay servicio en ejecución.
+
+El modo residente del SO (Items 060-062) se controla con ``install`` —
+exige ``--config``/``ODIN_CONFIG``, carga y valida la configuración (errores →
+2, sin instalar) e instala el servicio en systemd/SCM; en Linux sin permisos
+devuelve la guía para completar la instalación a mano —, ``uninstall``,
+``start`` y ``stop`` — operan por nombre fijo ``odin`` con ``--config``
+opcional y devuelven 0, o 1 si el gestor falla (``ServiceError``, plataforma
+no soportada) —.
 
 Convención de exit codes (constantes exportadas de este módulo):
 
@@ -61,6 +68,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import signal
 import sys
 import threading
@@ -69,6 +77,7 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from logging import Logger
+from pathlib import Path
 from typing import Any
 
 from odin import __version__
@@ -85,6 +94,15 @@ from odin.scheduler import (
     reload_request_path,
     render_service_status,
     state_path,
+)
+from odin.service import (
+    ServiceError,
+    ServiceManager,
+    ServiceManagerKind,
+    ServiceSpec,
+    ServiceStatus,
+    create_service_manager,
+    render_platform_status,
 )
 from odin.validate import (
     Severity,
@@ -120,6 +138,7 @@ _RELOAD_VIA_SIGNAL = sys.platform != "win32" and hasattr(signal, "SIGUSR1")
 
 MaskFn = Callable[[str], str]
 ServiceFactory = Callable[..., SchedulerService]
+ManagerFactory = Callable[..., ServiceManager]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -127,12 +146,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     Subcomandos registrados hoy: ``validate``, ``run`` — este último orquesta el
     pipeline completo de las Etapas 2-5 (respaldo, compresión, transferencia,
-    correo y retención local) en ``odin.pipeline`` — y ``service`` (Items 053 y
-    055) con las acciones ``run`` (scheduler en primer plano), ``status``
-    (consulta del estado en ``work_dir``) y ``reload`` (recarga en caliente).
-    Punto de extensión: sobre ``service`` llegarán ``install``/``uninstall``/
-    ``start``/``stop`` del modo residente del SO (Etapa 7), reutilizando la
-    resolución ``--config``/``ODIN_CONFIG`` de este módulo.
+    correo y retención local) en ``odin.pipeline`` — y ``service`` (Items 053,
+    055 y 062) con las acciones ``run`` (scheduler en primer plano), ``status``
+    (consulta del estado en ``work_dir``), ``reload`` (recarga en caliente) e
+    ``install``/``uninstall``/``start``/``stop`` (ciclo de vida del modo
+    residente del SO sobre los gestores de ``odin.service``).
     """
     parser = argparse.ArgumentParser(
         prog="odin",
@@ -189,14 +207,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     service_parser = subparsers.add_parser(
         "service",
-        help="Ejecuta el scheduler en primer plano o consulta su estado.",
+        help="Ejecuta el scheduler en primer plano o administra el servicio del SO.",
         description=(
             "Modo servicio del scheduler interno: 'run' ejecuta el scheduler en primer "
             "plano (hasta SIGINT/SIGTERM) con las políticas de solapamiento y misfire "
             "del bloque scheduler del JSON, y 'status' consulta el estado persistido en "
             "local.work_dir/scheduler_state.json (última ejecución, próximo disparo, "
-            "salud y errores recientes). El modo residente del SO (install/start/stop) "
-            "llega en la Etapa 7."
+            "salud y errores recientes). 'install'/'uninstall'/'start'/'stop' "
+            "administran el servicio residente del SO (systemd en Linux, SCM en "
+            "Windows) para que el scheduler corra desatendido."
         ),
     )
     service_actions = service_parser.add_subparsers(dest="service_action", title="acciones")
@@ -249,6 +268,68 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     service_reload_parser.add_argument(
+        "--config",
+        metavar="RUTA",
+        default=None,
+        help=f"ruta al JSON de configuración; si se omite, usa la variable {ENV_CONFIG_VAR}.",
+    )
+    service_install_parser = service_actions.add_parser(
+        "install",
+        help="Instala el servicio residente del SO (systemd/SCM).",
+        description=(
+            "Instala (o reemplaza) el servicio residente del SO para que el scheduler "
+            "corra desatendido: systemd en Linux, SCM en Windows. Exige --config o "
+            "ODIN_CONFIG con una configuración cargable y sin errores de validación "
+            "(errores → exit code 2, sin instalar). En Linux sin permisos no escribe "
+            "nada y devuelve la guía con la unit y los comandos a ejecutar con sudo."
+        ),
+    )
+    service_install_parser.add_argument(
+        "--config",
+        metavar="RUTA",
+        default=None,
+        help=f"ruta al JSON de configuración; si se omite, usa la variable {ENV_CONFIG_VAR}.",
+    )
+    service_uninstall_parser = service_actions.add_parser(
+        "uninstall",
+        help="Desinstala el servicio residente del SO (idempotente).",
+        description=(
+            "Detiene, deshabilita y elimina el servicio residente del SO. Es idempotente: "
+            "una segunda invocación informa que no estaba instalado. Opera por nombre "
+            "fijo 'odin'; --config solo se usa para construir el gestor."
+        ),
+    )
+    service_uninstall_parser.add_argument(
+        "--config",
+        metavar="RUTA",
+        default=None,
+        help=f"ruta al JSON de configuración; si se omite, usa la variable {ENV_CONFIG_VAR}.",
+    )
+    service_start_parser = service_actions.add_parser(
+        "start",
+        help="Arranca el servicio residente del SO.",
+        description=(
+            "Arranca el servicio residente del SO y espera su transición a 'en "
+            "ejecución'. Opera por nombre fijo 'odin'; --config solo se usa para "
+            "construir el gestor. Un fallo del gestor devuelve exit code 1."
+        ),
+    )
+    service_start_parser.add_argument(
+        "--config",
+        metavar="RUTA",
+        default=None,
+        help=f"ruta al JSON de configuración; si se omite, usa la variable {ENV_CONFIG_VAR}.",
+    )
+    service_stop_parser = service_actions.add_parser(
+        "stop",
+        help="Detiene el servicio residente del SO.",
+        description=(
+            "Detiene el servicio residente del SO y espera su transición a 'detenido'. "
+            "Opera por nombre fijo 'odin'; --config solo se usa para construir el "
+            "gestor. Un fallo del gestor devuelve exit code 1."
+        ),
+    )
+    service_stop_parser.add_argument(
         "--config",
         metavar="RUTA",
         default=None,
@@ -775,19 +856,38 @@ def _cmd_service_run(
     return EXIT_OK
 
 
-def _cmd_service_status(args: argparse.Namespace) -> int:
-    """Ejecuta ``odin service status``: consulta el estado del servicio (Item 053).
+def _cmd_service_status(
+    args: argparse.Namespace, *, manager_factory: ManagerFactory | None = None
+) -> int:
+    """Ejecuta ``odin service status``: gestor del SO + estado del scheduler.
 
-    Es una consulta de solo lectura: exit 0 mientras la configuración cargue y
-    el estado se pueda interpretar (o su ausencia se informe). ``render_service_status``
-    distingue servicio en ejecución, estado obsoleto (pid muerto) y sin estado.
+    Items 053 y 063. Es una consulta de solo lectura: exit 0 mientras la
+    configuración cargue y el estado se pueda interpretar (o su ausencia se
+    informe). ``render_platform_status`` compone el encabezado real del
+    servicio en systemd/SCM (instalado, en ejecución, arranque automático,
+    política de reinicio) con ``render_service_status``, que distingue
+    servicio en ejecución, estado obsoleto (pid muerto) y sin estado. Un
+    ``ServiceError`` del gestor (systemctl/SCM caído o plataforma no
+    soportada) se reporta como advertencia **sin** fallar el comando.
+    ``manager_factory`` es inyectable para tests.
     """
     source = _resolve_config_source(args)
     config = _load_config_or_report(source)
     if config is None:
         return EXIT_CONFIG
     result = load_state(state_path(config.local.work_dir))
-    print(render_service_status(result))
+    factory = manager_factory or create_service_manager
+    service_status: ServiceStatus | None = None
+    warning: str | None = None
+    try:
+        service_status = factory(config.config_path.absolute()).status()
+    except ServiceError as exc:
+        warning = str(exc)
+    print(
+        render_platform_status(
+            service_status, render_service_status(result), warning=warning
+        )
+    )
     return EXIT_OK
 
 
@@ -840,8 +940,135 @@ def _cmd_service_reload(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _service_executable() -> str:
+    """Ruta del ejecutable de ODIN para la unit del servicio (Item 062).
+
+    systemd exige un ``ExecStart`` absoluto: se prefiere el propio
+    ``sys.argv[0]`` (lo invocado, p. ej. ``.../.venv/bin/odin``), con
+    ``shutil.which("odin")`` como respaldo de PATH. Como último recurso se
+    devuelve ``odin``: Windows no consume el ejecutable (el SCM registra la
+    clase del servicio) y en Linux el gestor reporta el error accionable si la
+    ruta no es absoluta.
+    """
+    candidates = [sys.argv[0] if sys.argv else "", shutil.which("odin") or ""]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if path.exists():
+            return str(path.resolve())
+    return "odin"
+
+
+def _service_manager_config_path(source: str | None) -> Path:
+    """Ruta absoluta con la que se construye el gestor en el ciclo de vida.
+
+    ``uninstall``/``start``/``stop`` identifican el servicio por nombre fijo y
+    no consumen el JSON; el contrato del gestor, en cambio, exige una ruta
+    absoluta. Con ``--config``/``ODIN_CONFIG`` se pasa esa ruta; sin fuente se
+    usa un centinela absoluto (``<cwd>/config.json``) que ninguna de esas
+    operaciones lee.
+    """
+    if source is not None:
+        return Path(source).absolute()
+    return Path.cwd() / "config.json"
+
+
+def _install_next_steps(manager: ServiceManager) -> str:
+    """Pasos siguientes por plataforma tras una instalación (Item 062)."""
+    if manager.manager is ServiceManagerKind.WINDOWS:
+        return (
+            "Siguiente paso: arranque el servicio con 'odin service start' y "
+            "consulte su estado con 'odin service status'."
+        )
+    return (
+        "Siguiente paso: arranque el servicio con 'odin service start' "
+        "(o 'sudo systemctl start odin.service') y consulte su estado con "
+        "'odin service status'."
+    )
+
+
+def _cmd_service_install(
+    args: argparse.Namespace, *, manager_factory: ManagerFactory | None = None
+) -> int:
+    """Ejecuta ``odin service install``: instala el servicio residente (Item 062).
+
+    Exige una fuente de configuración, la carga (``ConfigError`` → 2) y la
+    valida con ``validate_config``: un hallazgo ERROR de entorno/estructura
+    aborta la instalación con 2 (no se crea un servicio con una configuración
+    que fallaría al arrancar); las advertencias no bloquean. El ``ServiceSpec``
+    se construye con la ruta **absoluta** del JSON (el servicio corre sin cwd)
+    y el ejecutable resuelto. Un ``ServiceError`` del gestor (incluida la
+    plataforma no soportada) devuelve 1 con el motivo en stderr. El mensaje del
+    gestor se imprime tal cual: en Linux sin permisos es la guía con la unit y
+    los comandos ``sudo`` (Item 060).
+    """
+    source = _resolve_config_source(args)
+    config = _load_config_or_report(source)
+    if config is None:
+        return EXIT_CONFIG
+    report = validate_config(config)
+    if not report.is_valid(strict=False):
+        _print_report(report, strict=False)
+        return EXIT_CONFIG
+    spec = ServiceSpec(
+        config_path=config.config_path.absolute(),
+        executable=_service_executable(),
+    )
+    factory = manager_factory or create_service_manager
+    try:
+        manager = factory(spec.config_path)
+        message = manager.install(spec)
+    except ServiceError as exc:
+        print(f"No se pudo instalar el servicio: {exc}", file=sys.stderr)
+        return EXIT_INTERNAL
+    print(message)
+    print(_install_next_steps(manager))
+    return EXIT_OK
+
+
+_LIFECYCLE_VERBS = {
+    "uninstall": "desinstalar",
+    "start": "arrancar",
+    "stop": "detener",
+}
+
+
+def _cmd_service_lifecycle(
+    action: str,
+    args: argparse.Namespace,
+    *,
+    manager_factory: ManagerFactory | None = None,
+) -> int:
+    """Ejecuta ``odin service uninstall|start|stop`` (Item 062).
+
+    Las tres acciones operan por nombre fijo ``odin``: ``--config`` es opcional
+    y no se carga (solo resuelve la ruta con la que se construye el gestor).
+    Cada acción devuelve 0 con el mensaje del gestor o 1 con el motivo en
+    stderr si el gestor falla (``ServiceError``, plataforma no soportada).
+    """
+    source = _resolve_config_source(args)
+    factory = manager_factory or create_service_manager
+    try:
+        manager = factory(_service_manager_config_path(source))
+        if action == "uninstall":
+            message = manager.uninstall()
+        elif action == "start":
+            message = manager.start()
+        else:
+            message = manager.stop()
+    except ServiceError as exc:
+        print(
+            f"No se pudo {_LIFECYCLE_VERBS[action]} el servicio: {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_INTERNAL
+    print(message)
+    return EXIT_OK
+
+
 def _cmd_service(args: argparse.Namespace) -> int:
-    """Despacha las acciones de ``odin service`` (``run``/``status``/``reload``)."""
+    """Despacha las acciones de ``odin service`` (Items 053, 055 y 062)."""
     action = args.service_action
     if action == "run":
         return _cmd_service_run(args)
@@ -849,9 +1076,14 @@ def _cmd_service(args: argparse.Namespace) -> int:
         return _cmd_service_status(args)
     if action == "reload":
         return _cmd_service_reload(args)
+    if action == "install":
+        return _cmd_service_install(args)
+    if action in ("uninstall", "start", "stop"):
+        return _cmd_service_lifecycle(action, args)
     print(
         "Acción de 'service' requerida: run (scheduler en primer plano), "
-        "status (consulta el estado) o reload (recarga la configuración).",
+        "status (consulta el estado), reload (recarga la configuración), "
+        "install/uninstall (modo residente del SO), start o stop (control del servicio).",
         file=sys.stderr,
     )
     return EXIT_CONFIG

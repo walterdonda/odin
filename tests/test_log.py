@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import sys
 from collections.abc import Iterator
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -26,6 +27,7 @@ from odin.log import (
     attach_tail_buffer,
     capture_log_tail,
     detach_tail_buffer,
+    redirect_stdio_to_log,
     setup_logging,
 )
 
@@ -484,3 +486,134 @@ def test_tail_buffer_with_setup_logging_does_not_leak_secrets(
     file_text = (config.local.resolved_log_dir / LOG_FILENAME).read_text(encoding="utf-8")
     assert "masterkey" not in file_text
     assert "smtp-secret" not in file_text
+
+
+# --- Item 064: modo servicio (sin consola) y redirección de stdio ---
+
+
+def test_setup_logging_service_mode_has_only_file_handler(
+    tmp_path: Path, odin_logger: logging.Logger
+) -> None:
+    config = _load_fixture_config(tmp_path)
+
+    setup_logging(config, console=False)
+
+    assert len(odin_logger.handlers) == 1
+    assert isinstance(odin_logger.handlers[0], RotatingFileHandler)
+    assert not any(type(handler) is logging.StreamHandler for handler in odin_logger.handlers)
+
+
+def test_setup_logging_service_mode_rotates_and_masks(
+    tmp_path: Path, odin_logger: logging.Logger
+) -> None:
+    config = _load_fixture_config(tmp_path)
+    logger = setup_logging(config, console=False)
+
+    logger.info("conectando con password=%s", "masterkey")
+    logger.warning("clave smtp-secret en uso")
+
+    handler = _file_handler(odin_logger)
+    assert handler.maxBytes == DEFAULT_MAX_BYTES
+    assert handler.backupCount == DEFAULT_BACKUP_COUNT
+    file_text = (config.local.resolved_log_dir / LOG_FILENAME).read_text(encoding="utf-8")
+    assert "masterkey" not in file_text
+    assert "smtp-secret" not in file_text
+    assert file_text.count("***") >= 2
+
+
+def test_setup_logging_service_mode_respects_level(
+    tmp_path: Path, odin_logger: logging.Logger
+) -> None:
+    config = _load_fixture_config(tmp_path, log_level="WARNING")
+    logger = setup_logging(config, console=False)
+
+    logger.info("no debe quedar registrada")
+    logger.error("sí debe quedar registrada")
+
+    file_text = (config.local.resolved_log_dir / LOG_FILENAME).read_text(encoding="utf-8")
+    assert "no debe quedar registrada" not in file_text
+    assert "sí debe quedar registrada" in file_text
+
+
+def test_setup_logging_service_mode_is_idempotent(
+    tmp_path: Path, odin_logger: logging.Logger
+) -> None:
+    config = _load_fixture_config(tmp_path)
+
+    setup_logging(config, console=False)
+    logger = setup_logging(config, console=False)
+
+    assert len(logger.handlers) == 1
+    logger.info("una sola línea")
+    file_text = (config.local.resolved_log_dir / LOG_FILENAME).read_text(encoding="utf-8")
+    assert file_text.count("una sola línea") == 1
+
+
+def test_setup_logging_console_default_still_has_two_handlers(
+    tmp_path: Path, odin_logger: logging.Logger
+) -> None:
+    config = _load_fixture_config(tmp_path)
+
+    setup_logging(config)
+
+    assert len(odin_logger.handlers) == 2
+    assert sum(isinstance(handler, RotatingFileHandler) for handler in odin_logger.handlers) == 1
+    assert sum(type(handler) is logging.StreamHandler for handler in odin_logger.handlers) == 1
+
+
+def test_redirect_stdio_to_log_writes_and_restores(tmp_path: Path) -> None:
+    target = tmp_path / "logs" / LOG_FILENAME
+    target.parent.mkdir()
+    previous_out, previous_err = sys.stdout, sys.stderr
+
+    with redirect_stdio_to_log(target) as yielded:
+        assert yielded == target
+        assert sys.stdout is not previous_out
+        assert sys.stderr is not previous_err
+        print("a la salida estándar")
+        print("al error estándar", file=sys.stderr)
+
+    assert sys.stdout is previous_out
+    assert sys.stderr is previous_err
+    text = target.read_text(encoding="utf-8")
+    assert "a la salida estándar" in text
+    assert "al error estándar" in text
+
+
+def test_redirect_stdio_to_log_restores_on_exception(tmp_path: Path) -> None:
+    target = tmp_path / LOG_FILENAME
+    previous_out, previous_err = sys.stdout, sys.stderr
+
+    with pytest.raises(RuntimeError, match="boom"), redirect_stdio_to_log(target):
+        print("antes de fallar")
+        raise RuntimeError("boom")
+
+    assert sys.stdout is previous_out
+    assert sys.stderr is previous_err
+    assert "antes de fallar" in target.read_text(encoding="utf-8")
+
+
+def test_redirect_stdio_to_log_tolerates_unwritable_target(tmp_path: Path) -> None:
+    target = tmp_path / "soy-un-directorio"
+    target.mkdir()
+    previous_out, previous_err = sys.stdout, sys.stderr
+
+    with redirect_stdio_to_log(target):
+        print("texto descartado")
+        print("otro", file=sys.stderr)
+
+    assert sys.stdout is previous_out
+    assert sys.stderr is previous_err
+    assert target.is_dir()
+
+
+def test_redirect_stdio_to_log_tolerates_missing_parent_directory(tmp_path: Path) -> None:
+    target = tmp_path / "no" / "existe" / LOG_FILENAME
+    previous_out, previous_err = sys.stdout, sys.stderr
+
+    with redirect_stdio_to_log(target):
+        print("sin directorio padre")
+
+    assert sys.stdout is previous_out
+    assert sys.stderr is previous_err
+    assert not target.exists()
