@@ -24,8 +24,8 @@ Principios (ver ``docs/aide/items/006-logica-completa-validate.md``):
 
 Reuso: ``odin validate`` es el preflight manual recomendado antes de
 ``odin run`` (que no lo invoca: reporta los fallos por base durante la
-ejecución) y el modo servicio (Etapa 6) lo reutilizará para validar la recarga
-en caliente de la configuración.
+ejecución) y el modo servicio lo reutiliza para validar la configuración antes
+de aplicarla en la recarga en caliente (Item 055).
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Scheduler interno de ODIN sobre APScheduler 3.x (Items 049-054).
+"""Scheduler interno de ODIN sobre APScheduler 3.x (Items 049-055).
 
 Contenido:
 
