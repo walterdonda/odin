@@ -5,7 +5,9 @@ confiabilidad/observabilidad (timeouts de gbak, umbral de disco libre,
 reintentos SFTP, nivel de log y cola de log para el correo a DevOps).
 
 Características:
-- Solo stdlib (json, dataclasses, pathlib, enum, zoneinfo, difflib, re).
+- Solo stdlib (json, dataclasses, pathlib, enum, zoneinfo, difflib, re) más
+  APScheduler (``CronTrigger.from_crontab``, Item 049) para validar las
+  expresiones cron con exactamente el mismo parser que usará el scheduler.
 - Validación con reporte agregado: todos los problemas de una vez, cada uno
   con ruta de campo (``field_path``) y mensaje legible.
 - Campos desconocidos son error, con sugerencia del campo más cercano.
@@ -25,6 +27,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, TypeVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from apscheduler.triggers.cron import CronTrigger
 
 from odin.paths import normalize_path
 
@@ -781,7 +785,9 @@ def _parse_local(v: _Validator, raw: dict[str, Any], path: str, base_dir: Path) 
 _JOB_FIELDS = frozenset({"databases", "schedule", "on_misfire", "skip_if_running"})
 
 
-def _parse_job(v: _Validator, raw: dict[str, Any], path: str) -> SchedulerJob:
+def _parse_job(
+    v: _Validator, raw: dict[str, Any], path: str, timezone: ZoneInfo | None
+) -> SchedulerJob:
     v.unknown_fields(raw, _JOB_FIELDS, path)
     databases: list[str] = []
     if "databases" not in raw:
@@ -797,12 +803,14 @@ def _parse_job(v: _Validator, raw: dict[str, Any], path: str) -> SchedulerJob:
                 else:
                     v.add(f"{path}.databases[{index}]", "debe ser una cadena de texto no vacía")
     schedule = v.str_field(raw, "schedule", path) or ""
-    if schedule and len(schedule.split()) != 5:
-        v.add(
-            f"{path}.schedule",
-            "debe tener exactamente 5 campos (formato cron), "
-            f"se encontraron {len(schedule.split())}",
-        )
+    if schedule:
+        # Misma validación que usará el scheduler (rango y sintaxis); con la
+        # timezone global ya validada, o UTC si esa también falló (así el
+        # usuario ve ambos problemas de una vez).
+        try:
+            CronTrigger.from_crontab(schedule, timezone=timezone or ZoneInfo("UTC"))
+        except ValueError as exc:
+            v.add(f"{path}.schedule", f"expresión cron inválida ('{schedule}'): {exc}")
     on_misfire = v.enum_field(
         raw, "on_misfire", path, MisfirePolicy, default=MisfirePolicy.RUN_ONCE
     )
@@ -822,8 +830,9 @@ def _parse_scheduler(v: _Validator, raw: dict[str, Any], path: str) -> Scheduler
     v.unknown_fields(raw, _SCHEDULER_FIELDS, path)
     enabled = v.bool_field(raw, "enabled", path, default=False)
     timezone = v.str_field(raw, "timezone", path, required=False, default="UTC") or "UTC"
+    timezone_info: ZoneInfo | None = None
     try:
-        ZoneInfo(timezone)
+        timezone_info = ZoneInfo(timezone)
     except ZoneInfoNotFoundError, ValueError:
         v.add(f"{path}.timezone", f"zona horaria desconocida: '{timezone}'")
     jobs: list[SchedulerJob] = []
@@ -834,7 +843,7 @@ def _parse_scheduler(v: _Validator, raw: dict[str, Any], path: str) -> Scheduler
                 item_path = f"{path}.jobs[{index}]"
                 item_map = v.mapping(item, item_path)
                 if item_map is not None:
-                    jobs.append(_parse_job(v, item_map, item_path))
+                    jobs.append(_parse_job(v, item_map, item_path, timezone_info))
     return SchedulerConfig(enabled=enabled, timezone=timezone, jobs=jobs)
 
 

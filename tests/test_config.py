@@ -290,6 +290,47 @@ def test_schedule_must_have_five_fields(tmp_path: Path) -> None:
     assert any(p.field_path == "config.scheduler.jobs[0].schedule" for p in problems)
 
 
+def test_schedule_out_of_range_reports_cron_error(tmp_path: Path) -> None:
+    def bad(d: dict[str, Any]) -> None:
+        d["scheduler"]["jobs"][0]["schedule"] = "0 25 * * *"
+
+    problems = _problems(tmp_path, _mutate(bad))
+    assert any(
+        p.field_path == "config.scheduler.jobs[0].schedule" and "cron" in p.message
+        for p in problems
+    )
+
+
+def test_schedule_garbage_reports_cron_error(tmp_path: Path) -> None:
+    def bad(d: dict[str, Any]) -> None:
+        d["scheduler"]["jobs"][0]["schedule"] = "not a cron"
+
+    problems = _problems(tmp_path, _mutate(bad))
+    assert any(
+        p.field_path == "config.scheduler.jobs[0].schedule" and "cron" in p.message
+        for p in problems
+    )
+
+
+def test_schedule_with_ranges_and_steps_is_valid(tmp_path: Path) -> None:
+    def rich(d: dict[str, Any]) -> None:
+        d["scheduler"]["jobs"][0]["schedule"] = "*/15 8-18 * * 1-5"
+
+    config = _load(tmp_path, _mutate(rich))
+    assert config.scheduler.jobs[0].schedule == "*/15 8-18 * * 1-5"
+
+
+def test_invalid_timezone_and_cron_report_both_problems(tmp_path: Path) -> None:
+    def bad(d: dict[str, Any]) -> None:
+        d["scheduler"]["timezone"] = "Marte/Olympus_Mons"
+        d["scheduler"]["jobs"][0]["schedule"] = "0 25 * * *"
+
+    problems = _problems(tmp_path, _mutate(bad))
+    paths = {p.field_path for p in problems}
+    assert "config.scheduler.timezone" in paths
+    assert "config.scheduler.jobs[0].schedule" in paths
+
+
 def test_email_format(tmp_path: Path) -> None:
     def bad(d: dict[str, Any]) -> None:
         d["notification"]["to"] = "no-es-un-email"

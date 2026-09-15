@@ -36,11 +36,14 @@ import stat
 import sys
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from odin.config import AuthMethod, Config, ConfigError, HostKeyPolicy
 from odin.paths import is_windows_flavor
+from odin.scheduler import cron_trigger, next_fire_times
 
 __all__ = [
     "PARSE_SKIPPED_NOTE",
@@ -537,6 +540,7 @@ def _check_scheduler(report: ValidationReport, config: Config) -> None:
         f"habilitado con {len(scheduler.jobs)} job(s) en {scheduler.timezone}",
         check="scheduler_enabled",
     )
+    _check_scheduler_next_fires(report, config)
     covered = {name for job in scheduler.jobs for name in job.databases}
     for index, database in enumerate(config.databases):
         if database.name not in covered:
@@ -546,6 +550,50 @@ def _check_scheduler(report: ValidationReport, config: Config) -> None:
                 f"la base '{database.name}' no está incluida en ningún job del scheduler",
                 check="database_covered_by_job",
             )
+
+
+def _check_scheduler_next_fires(report: ValidationReport, config: Config) -> None:
+    """Reporta el próximo disparo de cada job (Item 049) en la timezone global.
+
+    ``validate`` no debe romper ante una config que llegó a cargarse: cualquier
+    ``ValueError`` imprevisto (una expresión que el parser de config aceptó pero
+    el trigger no puede programar) se degrada a ``WARNING``. Una expresión sin
+    próximos disparos (p. ej. ``0 0 31 2 *``, fecha imposible) también advierte:
+    es una config que nunca ejecutaría el job.
+    """
+    scheduler = config.scheduler
+    try:
+        now = datetime.now(ZoneInfo(scheduler.timezone))
+    except ZoneInfoNotFoundError:
+        return
+    for index, job in enumerate(scheduler.jobs):
+        field_path = f"{_ROOT}.scheduler.jobs[{index}].schedule"
+        try:
+            upcoming = next_fire_times(
+                cron_trigger(job.schedule, scheduler.timezone), now, 1
+            )
+        except ValueError as exc:
+            report.add(
+                Severity.WARNING,
+                field_path,
+                f"no se pudo calcular el próximo disparo: {exc}",
+                check="scheduler_next_fire",
+            )
+            continue
+        if not upcoming:
+            report.add(
+                Severity.WARNING,
+                field_path,
+                f"la expresión '{job.schedule}' no tiene próximos disparos",
+                check="scheduler_next_fire",
+            )
+            continue
+        report.add(
+            Severity.OK,
+            field_path,
+            f"próximo disparo: {upcoming[0].isoformat()} (schedule: '{job.schedule}')",
+            check="scheduler_next_fire",
+        )
 
 
 def _check_servers(report: ValidationReport, config: Config) -> None:

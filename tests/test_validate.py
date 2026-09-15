@@ -447,6 +447,25 @@ def test_scheduler_disabled_is_info(tmp_path: Path) -> None:
     assert "one-shot" in _messages(report, "config.scheduler")
 
 
+def test_scheduler_next_fire_is_ok_per_job(tmp_path: Path) -> None:
+    report = validate_config(_config(tmp_path))
+    field_path = "config.scheduler.jobs[0].schedule"
+    findings = _of(report, field_path)
+    assert [finding.severity for finding in findings] == [Severity.OK]
+    assert findings[0].check == "scheduler_next_fire"
+    assert "próximo disparo" in findings[0].message
+
+
+def test_scheduler_impossible_schedule_warns(tmp_path: Path) -> None:
+    def mutate(data: dict[str, Any]) -> None:
+        data["scheduler"]["jobs"][0]["schedule"] = "0 0 31 2 *"
+
+    report = validate_config(_config(tmp_path, mutate=mutate))
+    findings = _of(report, "config.scheduler.jobs[0].schedule")
+    assert [finding.severity for finding in findings] == [Severity.WARNING]
+    assert "no tiene próximos disparos" in findings[0].message
+
+
 def test_database_not_covered_by_any_job_warns(tmp_path: Path) -> None:
     def mutate(data: dict[str, Any]) -> None:
         data["databases"].append({**data["databases"][0], "name": "erp_secundaria"})
