@@ -1,0 +1,83 @@
+# CI multiplataforma de ODIN (Item 073).
+#
+# Lista para habilitar al publicar el repositorio: hoy no hay remoto, así que
+# este workflow no se ha ejecutado todavía (ver "Integración continua" del
+# README y docs/service.md §9). No usa secretos y solo necesita permiso de
+# lectura del contenido.
+#
+# El gate de cada job es `scripts/verify.py` (Item 071), el mismo que corre
+# localmente: `uv sync` -> pytest -> ruff -> mypy -> `odin validate` de los dos
+# ejemplos. El job Windows suma el ciclo de vida real del servicio contra el
+# SCM (los runners son administradores) con el escenario gated
+# `ODIN_WINDOWS_SERVICE_SMOKE=1`.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Instalar uv (con caché)
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Sincronizar el entorno
+        run: uv sync --locked
+
+      - name: Gate de verificación (scripts/verify.py)
+        run: uv run python scripts/verify.py
+
+      - name: Construir wheel y sdist
+        run: uv build
+
+      - name: Publicar el wheel como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: odin-wheel-linux
+          path: dist/*.whl
+          if-no-files-found: error
+
+  windows:
+    name: Windows (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Instalar uv (con caché)
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Sincronizar el entorno
+        run: uv sync --locked
+
+      - name: Gate de verificación (scripts/verify.py)
+        run: uv run python scripts/verify.py
+
+      - name: Ciclo de vida real del servicio Windows (SCM)
+        env:
+          ODIN_WINDOWS_SERVICE_SMOKE: "1"
+        run: uv run pytest tests/test_service_windows_integration.py -q
+
+      - name: Construir wheel y sdist
+        run: uv build
+
+      - name: Publicar el wheel como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: odin-wheel-windows
+          path: dist/*.whl
+          if-no-files-found: error
