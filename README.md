@@ -106,9 +106,9 @@ de validez, a stdout.
 uv run odin run --config ruta/al/config.json     # o vía ODIN_CONFIG
 ```
 
-`odin run` ejecuta la **fase de respaldo** de ODIN sobre todas las bases de la
-configuración, en forma secuencial y con aislamiento de fallos: una base que
-falla no interrumpe a las siguientes:
+`odin run` ejecuta el **ciclo one-shot completo** de ODIN sobre todas las bases
+de la configuración, en forma secuencial y con aislamiento de fallos: una base
+que falla no interrumpe a las siguientes.
 
 1. **Resuelve `gbak`** por base: `databases[].gbak_path` explícito; si es
    `null`, auto-detección por SO y versión de Firebird (rutas típicas de
@@ -119,33 +119,104 @@ falla no interrumpe a las siguientes:
    `-password`, `-role`). La contraseña se enmascara en los logs. `gbak` no
    admite un switch de charset: el respaldo transportable no depende del
    charset de conexión, por eso `charset` se conserva en la configuración
-   pero no se pasa al comando.
+   pero no se pasa al comando. Crea `local.work_dir` si no existe y guarda
+   cada respaldo como `<nombre_bd>_<timestamp>.fbk` (timestamp
+   `YYYYMMDD_HHMMSS`).
 3. **Valida cada `.fbk`**: existe, no está vacío y es legible.
 4. **Comprime cada `.fbk` (Etapa 3)**: utiliza `py7zr` para crear archivos
    `.fbk.7z`. El nivel de compresión y el cifrado AES-256 (si se provee
    `compression.password`) son configurables. Los archivos se nombran
-   `<nombre_bd>_<timestamp>.fbk.7z` para el backup. El proceso
-   mide la duración y el ratio de compresión, reportándolo en los logs.
-5. Crea `local.work_dir` si no existe y guarda cada respaldo como
-   `<nombre_bd>_<timestamp>.fbk` (timestamp `YYYYMMDD_HHMMSS`).
-6. **Transfiere cada `.fbk.7z` (Etapa 4)**: con paramiko, a todos los
+   `<nombre_bd>_<timestamp>.fbk.7z`. El proceso mide la duración y el ratio de
+   compresión, reportándolo en los logs.
+5. **Transfiere cada `.fbk.7z` (Etapa 4)**: con paramiko, a todos los
    `servers` configurados (SFTP con reintentos, timeouts y verificación de
    tamaño por servidor). Solo se transfieren los artefactos con respaldo y
    compresión exitosos; una base cuenta como exitosa únicamente si las tres
    fases culminan bien. El resumen informa, por base y por servidor, la ruta
    remota, los bytes verificados, la duración y el estado (OK/FALLO).
-7. **Envía el informe por correo (Etapa 5)**: con la sección `notification`
-   (`smtp`, `to`, `from`, `log_tail_lines`) envía **siempre** el resumen de la
-   ejecución a la casilla de control: estado global ÉXITO/PARCIAL/FALLO,
-   detalle por base (tamaños, duración y error de la fase que falló), detalle
-   por servidor destino y las últimas líneas del log. El correo es solo texto:
-   nunca adjunta el backup ni incluye credenciales (doble enmascarado). Un
-   SMTP caído no rompe la corrida: el motivo queda en el log y en el resumen,
-   y el exit code pasa de 0 a 1.
+6. **Envía el informe por correo (Etapa 5)**: se envía **siempre**, con el
+   estado global, el detalle por base y por servidor y las últimas líneas del
+   log (ver [Notificación por correo](#notificación-por-correo)). Un SMTP caído
+   no rompe la corrida: el motivo queda en el log y en el resumen, y el exit
+   code pasa de 0 a 1.
+7. **Aplica la retención local (F8)**: elimina las copias gestionadas de
+   `work_dir` más antiguas que `local.retention_days` (ver
+   [Retención local](#retención-local)). Es una función secundaria: sus errores
+   no alteran el exit code.
 
-El correo se envía también cuando el respaldo falla o el lote no se ejecutó;
-si el servidor SMTP no responde, `odin run` termina con un error registrado
-(exit code 1 en una corrida por lo demás exitosa) en lugar de crashear.
+## Notificación por correo
+
+Al terminar cada ejecución —éxito total, parcial o fallo, incluso si el lote no
+llegó a ejecutarse— ODIN envía el informe a `notification.to` desde
+`notification.from` usando `notification.smtp`:
+
+```json
+"notification": {
+  "to": "control@example.com",
+  "from": "odin-backups@example.com",
+  "log_tail_lines": 50,
+  "smtp": {
+    "host": "smtp.example.com",
+    "port": 587,
+    "starttls": true,
+    "username": "odin-backups@example.com",
+    "password": "***"
+  }
+}
+```
+
+| Campo | Default | Descripción |
+|---|---|---|
+| `notification.to` / `notification.from` | — (requeridos) | Casilla de control y remitente del informe. |
+| `notification.log_tail_lines` | `50` | Últimas líneas del log (ya enmascaradas) que se anexan al cuerpo; `0` desactiva la cola. |
+| `notification.smtp.host` / `port` | — (requeridos) | Servidor SMTP. |
+| `notification.smtp.starttls` | `true` | Negocia STARTTLS antes de autenticar; `false` envía en plano (relays locales). |
+| `notification.smtp.ssl` | `false` | SSL implícito (típicamente puerto 465); mutuamente excluyente con `starttls: true`. |
+| `notification.smtp.username` / `password` | `""` | Autenticación SMTP; vacíos omiten el `AUTH`. |
+
+El timeout de conexión/operación SMTP es de 30 s (interno, no configurable).
+
+**Contenido del informe** (texto plano): estado global `ÉXITO`/`PARCIAL`/`FALLO`
+en el asunto y el cuerpo; detalle por base (ruta del `.fbk`, tamaño, duración,
+tamaño comprimido y el error de la fase que falló); detalle por servidor destino
+(`base → servidor: OK/FALLO` con motivo, bytes y duración); totales de la
+corrida y las últimas líneas del log cuando `log_tail_lines > 0`.
+
+**Seguridad:** el correo es solo texto y **nunca** adjunta el backup. El asunto
+y el cuerpo pasan por el enmascarador de secretos además del enmascarado de los
+logs, así que no incluyen contraseñas de bases, SFTP o SMTP, ni el contenido de
+claves privadas.
+
+**Si el SMTP cae**, `odin run` no crashea: registra el motivo en el log y en el
+resumen ("Correo NO enviado: ...") y devuelve exit code 1 cuando el resto de la
+corrida fue exitosa (ver [Exit codes](#exit-codes)).
+
+## Retención local
+
+`local.retention_days` habilita la limpieza de las copias locales, que corre
+**después** del envío del correo:
+
+```json
+"local": {
+  "work_dir": "/var/backups/odin",
+  "retention_days": 7
+}
+```
+
+| Valor | Comportamiento |
+|---|---|
+| `0` | Deshabilitada: no examina ni borra nada. |
+| `N > 0` | Elimina `.fbk` y `.fbk.7z` de `work_dir` con `mtime` estrictamente anterior a `ahora − N días`. |
+
+Solo se eliminan **archivos gestionados por ODIN**, es decir cuyo nombre cumple
+la convención `<nombre_bd>_YYYYMMDD_HHMMSS.fbk` o `.fbk.7z`; nunca se tocan
+`config.json`, `odin.log`, subdirectorios, enlaces simbólicos ni archivos
+ajenos. Los artefactos recién creados por la corrida actual quedan protegidos
+aunque el reloj del sistema esté desfasado (se exige `mtime >=` inicio de la
+corrida). Un borrado fallido se registra por archivo y no interrumpe el resto.
+
+La retención es una **función secundaria**: sus errores se reportan en el
+resumen y en el log, pero no alteran el exit code de la corrida.
 
 ## Exit codes
 

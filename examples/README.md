@@ -50,11 +50,11 @@ odin validate --config /ruta/al/config.json --strict  # advertencias → 2
 
 | Código | Significado |
 |---|---|
-| 0 | Configuración válida (puede tener advertencias) · `odin run`: todas las bases respaldadas |
-| 1 | Error interno inesperado |
-| 2 | Error de configuración, o advertencias con `--strict` |
-| 3 | `odin run`: fallo parcial (algunas bases respaldadas y otras con error) |
-| 4 | `odin run`: fallo total (ninguna base respaldada) |
+| 0 | Configuración válida (puede tener advertencias) · `odin run`: todas las bases completaron respaldo, compresión y transferencia **y** el correo se envió |
+| 1 | Error interno inesperado · `odin run`: el correo no se pudo enviar en una corrida por lo demás exitosa |
+| 2 | Error de configuración, de uso de la CLI, o advertencias con `--strict` |
+| 3 | `odin run`: fallo parcial (algunas bases completaron todas las fases y otras fallaron en alguna); el desenlace del correo no cambia este código |
+| 4 | `odin run`: fallo total (ninguna base completó todas las fases) o lote no ejecutado/vacío; tiene precedencia sobre el correo |
 
 Tal como se commitean, los ejemplos devuelven **0** en Linux con un par de
 advertencias esperables y no bloqueantes (permisos 644 del archivo y
@@ -62,8 +62,11 @@ advertencias esperables y no bloqueantes (permisos 644 del archivo y
 por esas mismas advertencias: están pensados como plantilla, no para pasar
 `--strict` sin editar.
 
-Una vez adaptados, `odin run --config /ruta/al/config.json` ejecuta la fase de
-respaldo: ver [`README.md`](../README.md#ejecución-de-respaldos-odin-run).
+Una vez adaptados, `odin run --config /ruta/al/config.json` ejecuta el ciclo
+completo (respaldo → compresión → transferencia SFTP → correo → retención
+local): ver [`README.md`](../README.md#ejecución-de-respaldos-odin-run),
+[Notificación por correo](../README.md#notificación-por-correo) y
+[Retención local](../README.md#retención-local).
 
 ## Campos opcionales (no mostrados en los ejemplos)
 
@@ -85,12 +88,11 @@ confiabilidad/observabilidad, con sus valores por defecto:
 | `local` | `sftp_connect_timeout_sec` | `30` | Timeout de conexión SFTP (segundos). |
 
 `compression.password` (mostrado como `null`) habilita el cifrado **AES-256**
-del `.7z` cuando se le asigna un valor (funcionalidad de la Etapa 3).
+del `.7z` cuando se le asigna un valor (Etapa 3).
 
-> Estos campos se consumen en las etapas posteriores (respaldo, compresión,
-> transferencia, notificación y scheduler). Hoy `odin validate` ya los
-> reconoce y verifica su tipo/rango, y `odin run` consume los de la Etapa 2:
-> `gbak_timeout_sec`, `log_level`/`log_dir` y los parámetros de conexión de
-> cada base (`user`, `password`, `role`). El `charset` se conserva en el
-> contrato pero no se pasa a `gbak` (no tiene switch de charset; el respaldo
-> transportable no depende del charset de conexión).
+> Estos campos se consumen en las etapas implementadas: `odin run` usa respaldo,
+> compresión, transferencia, correo (Etapa 5) y retención local, y `odin
+> validate` verifica tipo/rango de todos —incluidos los del scheduler (Etapa 6,
+> aún sin ejecutor)—. El `charset` se conserva en el contrato pero no se pasa a
+> `gbak` (no tiene switch de charset; el respaldo transportable no depende del
+> charset de conexión).
