@@ -9,7 +9,9 @@ compresión 7z, transferencia SFTP (paramiko) y notificación por correo.
 
 - Python ≥ 3.14 (gestionado con [uv](https://docs.astral.sh/uv/))
 - uv
-- Firebird cliente o servidor instalado (aporta `gbak`)
+- `gbak` de la **misma versión mayor** que cada base Firebird (cliente o
+  servidor instalado); la [guía de compatibilidad Firebird](docs/firebird.md)
+  cubre la matriz 2.5 → 6 y la resolución de `gbak_path` por plataforma
 
 ## Compatibilidad de dependencias (Python 3.14)
 
@@ -113,7 +115,10 @@ que falla no interrumpe a las siguientes.
 
 1. **Resuelve `gbak`** por base: `databases[].gbak_path` explícito; si es
    `null`, auto-detección por SO y versión de Firebird (rutas típicas de
-   Windows/Linux y `PATH`).
+   Windows/Linux y `PATH`). La
+   [guía de compatibilidad Firebird](docs/firebird.md) explica la regla de
+   familia (mismo mayor que la base), las rutas buscadas y qué hacer con
+   varias instalaciones conviviendo.
 2. **Ejecuta `gbak -b`** con timeout propio (`databases[].gbak_timeout_sec` o,
    si no, `local.gbak_timeout_sec`) y los parámetros de conexión `user`,
    `password` and `role` de cada base (nombres completos de switch: `-user`,
