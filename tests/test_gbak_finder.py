@@ -30,6 +30,18 @@ class TestGbakFinder(unittest.TestCase):
 
     @patch("os.path.exists")
     @patch("sys.platform", "linux")
+    def test_find_gbak_linux_tarball_prefix(self, mock_exists):
+        # Prefijo por defecto de la instalación por tarball (Firebird 2.5):
+        # /usr/local/firebird, sin estar en PATH.
+        mock_exists.side_effect = lambda path: str(path) == "/usr/local/firebird/bin/gbak"
+
+        with patch.dict("os.environ", {"PATH": "/usr/local/bin"}):
+            found = find_gbak()
+
+        self.assertEqual(str(found), "/usr/local/firebird/bin/gbak")
+
+    @patch("os.path.exists")
+    @patch("sys.platform", "linux")
     def test_find_gbak_not_found(self, mock_exists):
         mock_exists.return_value = False
 

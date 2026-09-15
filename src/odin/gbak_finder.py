@@ -20,6 +20,7 @@ _WINDOWS_ROOTS = (
 _POSIX_ROOTS = (
     Path("/opt/firebird"),
     Path("/usr/lib/firebird"),
+    Path("/usr/local/firebird"),
 )
 
 _VERSION_GLOBS = ("Firebird*", "firebird*")
