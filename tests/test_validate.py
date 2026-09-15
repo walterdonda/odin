@@ -510,6 +510,9 @@ def test_retention_zero_is_info(tmp_path: Path) -> None:
 def test_retention_positive_is_ok(tmp_path: Path) -> None:
     report = validate_config(_config(tmp_path))
     assert _severities(report, "config.local.retention_days") == [Severity.OK]
+    message = _messages(report, "config.local.retention_days")
+    assert "después del envío del correo" in message
+    assert "(Etapa 5)" not in message
 
 
 # --- errores de parseo y renderizado ---

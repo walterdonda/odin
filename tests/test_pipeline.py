@@ -15,6 +15,7 @@ from odin.compress import BatchCompressionResult, CompressionResult
 from odin.config import Config, ServerConfig, load_config
 from odin.notify import NotificationResult, ReportMessage
 from odin.pipeline import PipelineResult, run_pipeline
+from odin.retention import RetentionResult
 from odin.transfer import BatchTransferResult, TransferResult
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -186,6 +187,28 @@ class FakeNotifier:
         if self._result is not None:
             return self._result
         return NotificationResult(success=True, recipient=self.to, duration_seconds=0.01)
+
+
+class FakeRetentionExecutor:
+    """Doble del ejecutor de retención (Item 046): registra llamadas."""
+
+    def __init__(
+        self,
+        *,
+        on_run: Callable[[], None] | None = None,
+        exception: Exception | None = None,
+    ) -> None:
+        self._on_run = on_run
+        self._exception = exception
+        self.calls: list[tuple[Path, int]] = []
+
+    def run_retention(self, work_dir: Path, retention_days: int) -> RetentionResult:
+        self.calls.append((Path(work_dir), retention_days))
+        if self._on_run is not None:
+            self._on_run()
+        if self._exception is not None:
+            raise self._exception
+        return RetentionResult()
 
 
 class _OfflineNotifier:
@@ -536,3 +559,66 @@ def test_log_tail_disabled_with_zero_lines(
     )
 
     assert "marca-de-cola-123456" not in notifier.calls[0].body
+
+
+# --- Retención del pipeline (Item 046) ---
+
+
+def test_retention_runs_after_email_and_stays_out_of_report(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    notifier = FakeNotifier()
+    sent_emails_at_retention: list[int] = []
+    retention = FakeRetentionExecutor(
+        on_run=lambda: sent_emails_at_retention.append(len(notifier.calls))
+    )
+
+    result = run_pipeline(
+        config,
+        backup=FakeBackupExecutor([_backup_result("erp_principal")]),
+        compression=FakeCompressionExecutor(
+            {"erp_principal": _compression_result("erp_principal")}
+        ),
+        transfer=FakeTransferExecutor(_all_ok),
+        notifier=notifier,
+        retention=retention,
+    )
+
+    assert sent_emails_at_retention == [1]
+    assert len(notifier.calls) == 1
+    assert "Retención local" not in notifier.calls[0].body
+    assert retention.calls == [(config.local.work_dir, config.local.retention_days)]
+    assert result.retention == RetentionResult()
+
+
+def test_retention_default_executor_result_is_reported(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+
+    result = _run_successful(config, FakeNotifier())
+
+    assert result.retention is not None
+    assert result.retention.enabled is True
+    assert result.retention.errors == ()
+
+
+def test_retention_failure_does_not_break_pipeline(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    notifier = FakeNotifier()
+    retention = FakeRetentionExecutor(exception=RuntimeError("boom"))
+
+    result = run_pipeline(
+        config,
+        backup=FakeBackupExecutor([_backup_result("erp_principal")]),
+        compression=FakeCompressionExecutor(
+            {"erp_principal": _compression_result("erp_principal")}
+        ),
+        transfer=FakeTransferExecutor(_all_ok),
+        notifier=notifier,
+        retention=retention,
+    )
+
+    assert result.backup.success is True
+    assert result.notification is not None
+    assert result.notification.success is True
+    assert result.retention is not None
+    assert len(result.retention.errors) == 1
+    assert "fallo inesperado de la retención" in result.retention.errors[0].message

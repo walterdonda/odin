@@ -35,6 +35,7 @@ from odin.cli import (
 from odin.config import load_config
 from odin.log import LOG_FILENAME, LOGGER_NAME
 from odin.notify import NotificationResult, ReportMessage
+from odin.retention import RetentionError, RetentionResult
 from odin.transfer import TransferResult
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -463,6 +464,25 @@ def _install_fake_notifier(
     monkeypatch.setattr("odin.pipeline.EmailNotifier", FakeEmailNotifier)
 
 
+def _install_fake_retention(
+    monkeypatch: pytest.MonkeyPatch, result: RetentionResult | None = None
+) -> None:
+    """Reemplaza ``RetentionExecutor`` en el pipeline por un doble sin disco.
+
+    Desde el Item 046 el pipeline aplica la retención al final de cada
+    corrida; el doble evita tocar el ``work_dir`` real y ``result`` permite
+    fijar el desenlace (eliminados, deshabilitada, errores).
+    """
+
+    class FakeRetentionExecutor:
+        def run_retention(self, work_dir: Any, retention_days: int) -> RetentionResult:
+            if result is not None:
+                return result
+            return RetentionResult(enabled=retention_days > 0)
+
+    monkeypatch.setattr("odin.pipeline.RetentionExecutor", FakeRetentionExecutor)
+
+
 def _install_fake_executor(
     monkeypatch: pytest.MonkeyPatch,
     builder: Callable[[list[Any], Path], BatchBackupResult],
@@ -470,9 +490,10 @@ def _install_fake_executor(
     """Reemplaza ``BackupExecutor`` en la CLI por un lote controlado.
 
     Desde el Item 035 la CLI delega en ``odin.pipeline.run_pipeline``, así
-    que el doble se instala en ``odin.pipeline``. El ``TransferExecutor`` y el
-    ``EmailNotifier`` también se doblan (éxito silencioso) para que los tests
-    de respaldo/compresión no intenten conexiones SFTP/SMTP reales.
+    que el doble se instala en ``odin.pipeline``. El ``TransferExecutor``, el
+    ``EmailNotifier`` y el ``RetentionExecutor`` también se doblan (éxito
+    silencioso) para que los tests de respaldo/compresión no intenten
+    conexiones SFTP/SMTP reales ni toquen archivos del ``work_dir``.
     """
 
     class FakeBackupExecutor:
@@ -486,6 +507,7 @@ def _install_fake_executor(
     monkeypatch.setattr("odin.pipeline.BackupExecutor", FakeBackupExecutor)
     _install_fake_transfer(monkeypatch)
     _install_fake_notifier(monkeypatch)
+    _install_fake_retention(monkeypatch)
 
 
 def _install_fake_transfer(
@@ -1028,3 +1050,86 @@ def test_run_help_mentions_email(capsys: pytest.CaptureFixture[str]) -> None:
         main(["run", "--help"])
     assert excinfo.value.code == 0
     assert "correo" in capsys.readouterr().out.lower()
+
+
+# --- Retención local en el resumen de la CLI (Item 046) ---
+
+
+def test_run_prints_retention_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+    _install_fake_executor(monkeypatch, _successful_batch)
+    _install_fake_retention(
+        monkeypatch,
+        RetentionResult(
+            examined=3,
+            deleted=2,
+            freed_bytes=2 * 1024 * 1024,
+            duration_seconds=0.01,
+        ),
+    )
+
+    assert main(["run", "--config", str(config_path)]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "Retención local: 2 archivo(s) eliminado(s), 2.0 MB liberados." in out
+    log_path = load_config(config_path).local.resolved_log_dir / LOG_FILENAME
+    log = log_path.read_text(encoding="utf-8")
+    assert "Retención local: 2/3 archivo(s) eliminados, 2097152 bytes liberados" in log
+
+
+def test_run_prints_retention_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+    _install_fake_executor(monkeypatch, _successful_batch)
+    _install_fake_retention(monkeypatch, RetentionResult(enabled=False))
+
+    assert main(["run", "--config", str(config_path)]) == EXIT_OK
+    assert "Retención local: deshabilitada (retention_days=0)." in capsys.readouterr().out
+
+
+def test_run_retention_errors_do_not_change_exit_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+    _install_fake_executor(monkeypatch, _successful_batch)
+    _install_fake_retention(
+        monkeypatch,
+        RetentionResult(
+            examined=1,
+            errors=(
+                RetentionError(path="/work/vieja_20200101_000000.fbk", message="permiso denegado"),
+            ),
+        ),
+    )
+
+    assert main(["run", "--config", str(config_path)]) == EXIT_OK
+    captured = capsys.readouterr()
+    assert "Correo enviado a control@example.com" in captured.out
+    assert (
+        "FALLO retención de /work/vieja_20200101_000000.fbk: permiso denegado"
+        in captured.err
+    )
+
+
+def test_run_masks_retention_error_secrets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+    _install_fake_executor(monkeypatch, _successful_batch)
+    _install_fake_retention(
+        monkeypatch,
+        RetentionResult(
+            errors=(
+                RetentionError(path="/work/vieja.fbk", message="acceso con masterkey denegado"),
+            ),
+        ),
+    )
+
+    assert main(["run", "--config", str(config_path)]) == EXIT_OK
+    captured = capsys.readouterr()
+    assert "masterkey" not in captured.err
+    assert "***" in captured.err
+    log_path = load_config(config_path).local.resolved_log_dir / LOG_FILENAME
+    assert "masterkey" not in log_path.read_text(encoding="utf-8")

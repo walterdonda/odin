@@ -620,7 +620,8 @@ def _check_compression_and_retention(report: ValidationReport, config: Config) -
         report.add(
             Severity.OK,
             f"{_ROOT}.local.retention_days",
-            f"las copias locales de más de {retention} día(s) se eliminarán (Etapa 5)",
+            f"las copias locales de más de {retention} día(s) se eliminarán "
+            "después del envío del correo",
             check="retention",
         )
 

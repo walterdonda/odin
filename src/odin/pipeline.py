@@ -17,6 +17,12 @@ notificación:
    fallo parcial, fallo total, lote no ejecutado y lote vacío—; un SMTP caído
    no lanza: el error queda en ``NotificationResult.error_message`` (la CLI
    degrada el exit code, Item 044).
+5. **Retención local** (Etapa 5, Item 046): después de enviar el informe se
+   limpian los artefactos gestionados de ``work_dir`` más antiguos que
+   ``local.retention_days`` (``odin.retention.RetentionExecutor``). Va al
+   final —el correo describe la corrida antes de la limpieza— y es una
+   función secundaria: sus errores se registran pero **no** alteran el
+   resultado global ni el exit code.
 
 El éxito global depende de la culminación exitosa de todas las fases para
 cada base: una base con transferencia fallida queda marcada como fallida en
@@ -26,21 +32,24 @@ transferencia se considera satisfecha (nada que transferir).
 
 El módulo no propaga excepciones operativas: cada fase ya encapsula sus
 errores en sus propios resultados (patrón de aislamiento de fallos de las
-Etapas 2-4) y el envío tiene una red de seguridad que convierte una
-excepción imprevista del notifier en un ``NotificationResult`` fallido. Los
-ejecutores y el notifier son inyectables para tests.
+Etapas 2-4), el envío tiene una red de seguridad que convierte una excepción
+imprevista del notifier en un ``NotificationResult`` fallido y la retención
+otra equivalente. Los ejecutores, el notifier y el ejecutor de retención son
+inyectables para tests.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 from odin.backup import BackupExecutor, BackupResult, BatchBackupResult
 from odin.compress import BatchCompressionResult, CompressionExecutor
 from odin.config import Config
 from odin.log import SecretMasker, capture_log_tail, logger
 from odin.notify import EmailNotifier, NotificationResult, ReportMessage, render_report
+from odin.retention import RetentionError, RetentionExecutor, RetentionResult
 from odin.transfer import (
     BatchTransferResult,
     TransferExecutor,
@@ -62,12 +71,15 @@ class PipelineResult:
     las bases que no llegaron a transferirse no aparecen en el mapping.
     ``notification`` es el desenlace del envío del informe (Item 043);
     ``None`` solo en construcciones manuales del resultado (el pipeline real
-    siempre envía y lo deja informado).
+    siempre envía y lo deja informado). ``retention`` es el desenlace de la
+    limpieza local posterior al correo (Item 046); también ``None`` solo en
+    construcciones manuales.
     """
 
     backup: BatchBackupResult
     transfers: Mapping[str, BatchTransferResult]
     notification: NotificationResult | None = None
+    retention: RetentionResult | None = None
 
 
 def _merge_compression_results(
@@ -147,6 +159,26 @@ def _send_report(
         return NotificationResult(success=False, recipient=recipient, error_message=message)
 
 
+def _run_retention(
+    executor: RetentionExecutor, work_dir: Path, retention_days: int
+) -> RetentionResult:
+    """Ejecuta la retención con red de seguridad: nunca propaga una excepción.
+
+    ``RetentionExecutor`` ya aísla los errores de borrado esperados; esta capa
+    cubre lo imprevisto (un fallo de programación del ejecutor) para que la
+    limpieza —función secundaria— jamás rompa la corrida ni altere su exit
+    code (Item 046).
+    """
+    try:
+        return executor.run_retention(work_dir, retention_days)
+    except Exception as exc:  # noqa: BLE001 - red de seguridad del pipeline
+        message = f"fallo inesperado de la retención: {type(exc).__name__}: {exc}"
+        logger.error("%s", message)
+        return RetentionResult(
+            errors=(RetentionError(path=str(work_dir), message=message),)
+        )
+
+
 def run_pipeline(
     config: Config,
     *,
@@ -154,20 +186,25 @@ def run_pipeline(
     compression: CompressionExecutor | None = None,
     transfer: TransferExecutor | None = None,
     notifier: EmailNotifier | None = None,
+    retention: RetentionExecutor | None = None,
 ) -> PipelineResult:
     """Ejecuta el pipeline completo de ``odin run`` y devuelve el resultado.
 
     Los ejecutores se construyen desde ``config`` (``local.gbak_timeout_sec``
     para respaldo; ``compression.level``/``password`` para compresión) y son
     inyectables para tests; el notifier default es
-    ``EmailNotifier.from_config(config)`` (Item 043). Cada fase aísla sus
-    fallos; el éxito global exige que todas las fases culminen bien para cada
-    base.
+    ``EmailNotifier.from_config(config)`` (Item 043) y el ejecutor de
+    retención default es ``RetentionExecutor()`` (Item 046). Cada fase aísla
+    sus fallos; el éxito global exige que todas las fases culminen bien para
+    cada base.
 
     Las tres fases corren con un ``TailBufferHandler`` adjunto (Item 041) que
     captura las últimas ``notification.log_tail_lines`` líneas —ya
     enmascaradas— para el informe; el correo se envía después de las fases,
-    con el lote final, también cuando el lote falló o quedó vacío.
+    con el lote final, también cuando el lote falló o quedó vacío. La
+    retención local corre al final, después del correo (el informe describe
+    la corrida antes de la limpieza) y sin efecto sobre el resultado global:
+    sus errores quedan en ``PipelineResult.retention``.
     """
     backup_executor = backup or BackupExecutor(timeout=config.local.gbak_timeout_sec)
     compression_executor = compression or CompressionExecutor(
@@ -176,6 +213,7 @@ def run_pipeline(
     )
     transfer_executor = transfer or TransferExecutor()
     notifier = notifier or EmailNotifier.from_config(config)
+    retention_executor = retention or RetentionExecutor()
 
     with capture_log_tail(
         config.notification.log_tail_lines, SecretMasker.from_config(config)
@@ -219,4 +257,9 @@ def run_pipeline(
     pipeline_result = PipelineResult(backup=final_batch, transfers=transfers)
     report = render_report(config, pipeline_result, log_tail=log_tail)
     notification = _send_report(notifier, report, config.notification.to)
-    return replace(pipeline_result, notification=notification)
+    retention_result = _run_retention(
+        retention_executor, config.local.work_dir, config.local.retention_days
+    )
+    return replace(
+        pipeline_result, notification=notification, retention=retention_result
+    )

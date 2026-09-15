@@ -17,9 +17,11 @@ forma secuencial y con aislamiento de fallos por base y por servidor. Una
 base cuenta como exitosa solo si el respaldo, la compresión y la transferencia
 a todos los servidores culminan bien (Items 025 y 035). El informe se envía
 **siempre** (éxito, parcial o fallo); un SMTP caído no crashea: queda en el
-log y en el resumen, y degrada el exit code 0 a 1. El subcomando ``service``
-(Etapas 6-7) aún no se registra; el punto de extensión queda documentado en
-``build_parser``.
+log y en el resumen, y degrada el exit code 0 a 1. Después del correo corre la
+retención local (``odin.retention.RetentionExecutor``, Item 046): es una
+función secundaria cuyos errores se reportan pero no alteran el exit code. El
+subcomando ``service`` (Etapas 6-7) aún no se registra; el punto de extensión
+queda documentado en ``build_parser``.
 
 Convención de exit codes (constantes exportadas de este módulo):
 
@@ -58,6 +60,7 @@ from odin.config import Config, ConfigError, load_config
 from odin.log import SecretMasker, setup_logging
 from odin.notify import NotificationResult
 from odin.pipeline import PipelineResult, run_pipeline
+from odin.retention import RetentionResult
 from odin.validate import (
     Severity,
     ValidationReport,
@@ -129,7 +132,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser = subparsers.add_parser(
         "run",
-        help="Ejecuta respaldo (gbak), compresión 7z, transferencia SFTP y el correo.",
+        help=(
+            "Ejecuta respaldo (gbak), compresión 7z, transferencia SFTP, "
+            "el correo y la retención."
+        ),
         description=(
             "Ejecuta el pipeline completo de cada base de la configuración: respaldo "
             "(gbak -b), compresión 7z, transferencia SFTP del .fbk.7z a todos los "
@@ -139,7 +145,8 @@ def build_parser() -> argparse.ArgumentParser:
             "su .fbk.7z. Una base cuenta como exitosa solo si el respaldo, la "
             "compresión y la transferencia culminan bien; el correo se envía siempre "
             "y un fallo de notificación en una corrida por lo demás exitosa devuelve "
-            "exit code 1 (matriz completa: 0/1/3/4)."
+            "exit code 1 (matriz completa: 0/1/3/4). Al final se aplica la retención "
+            "local (local.retention_days); sus errores no alteran el exit code."
         ),
     )
     run_parser.add_argument(
@@ -375,17 +382,46 @@ def _print_notification_summary(
     print(mask(f"Correo NO enviado: {detail}"), file=sys.stderr)
 
 
-def _cmd_run(args: argparse.Namespace) -> int:
-    """Ejecuta ``odin run``: respaldo (gbak) + compresión 7z + transferencia SFTP + correo.
+def _print_retention_summary(
+    retention: RetentionResult | None, *, mask: MaskFn | None = None
+) -> None:
+    """Imprime el resultado de la limpieza local (Item 046).
 
-    El pipeline completo vive en ``odin.pipeline.run_pipeline`` (Items 035 y
-    043). Matriz de exit codes (Item 044): ``0`` si todas las bases
+    Línea de totales por stdout —"Retención local: N archivo(s) eliminado(s), X
+    MB liberados." o la variante deshabilitada— y los errores por archivo por
+    stderr, como el resto de los fallos del resumen. Con ``mask`` cada línea
+    pasa por el enmascarador de secretos (un error de borrado podría exponer
+    una ruta sensible).
+    """
+    mask = mask or (lambda line: line)
+    if retention is None:
+        return
+    if not retention.enabled:
+        print(mask("Retención local: deshabilitada (retention_days=0)."))
+    else:
+        print(
+            mask(
+                f"Retención local: {retention.deleted} archivo(s) eliminado(s), "
+                f"{retention.freed_bytes / (1024 * 1024):.1f} MB liberados."
+            )
+        )
+    for error in retention.errors:
+        print(mask(f"- FALLO retención de {error.path}: {error.message}"), file=sys.stderr)
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    """Ejecuta ``odin run``: respaldo + compresión + transferencia + correo + retención.
+
+    El pipeline completo vive en ``odin.pipeline.run_pipeline`` (Items 035,
+    043 y 046). Matriz de exit codes (Item 044): ``0`` si todas las bases
     completaron las tres fases **y** el correo se envió; ``1`` si el correo
     falló en una corrida por lo demás exitosa (una ejecución sin informe
     incumple la trazabilidad); ``3`` si hubo mezcla de éxitos y fallos en
     cualquier fase (aunque el correo falle); ``4`` si falló todo, el lote no
     se ejecutó o quedó vacío (tiene precedencia sobre el correo); ``2`` para
-    errores de configuración (carga/parseo), igual que en ``validate``.
+    errores de configuración (carga/parseo), igual que en ``validate``. La
+    retención local posterior al correo es secundaria: sus errores se
+    reportan pero **no** cambian el exit code de la corrida (Item 046).
     """
     source = _resolve_config_source(args)
     if source is None:
@@ -416,6 +452,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     _print_backup_summary(batch, mask=masker.mask)
     _print_transfer_summary(pipeline, mask=masker.mask)
     _print_notification_summary(notification, mask=masker.mask)
+    _print_retention_summary(pipeline.retention, mask=masker.mask)
 
     succeeded = sum(result.success for result in batch.results)
     if logger is not None:
@@ -448,6 +485,20 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 else "sin resultado de notificación"
             )
             logger.error("Correo NO enviado: %s", detail)
+        retention = pipeline.retention
+        if retention is not None:
+            logger.info(
+                "Retención local: %d/%d archivo(s) eliminados, %d bytes liberados",
+                retention.deleted,
+                retention.examined,
+                retention.freed_bytes,
+            )
+            for error in retention.errors:
+                logger.error(
+                    "Retención local: no se pudo eliminar '%s': %s",
+                    error.path,
+                    error.message,
+                )
 
     if batch.error_message is not None or not batch.results:
         return EXIT_FAILURE
