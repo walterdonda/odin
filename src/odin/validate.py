@@ -22,8 +22,10 @@ Principios (ver ``docs/aide/items/006-logica-completa-validate.md``):
 - **Sin colores ANSI:** salida plana, portable a Windows Server y a
   redirección a archivo.
 
-Reuso previsto: preflight de ``odin run`` (Etapa 2) y validación previa de la
-recarga en caliente del modo servicio (Etapa 6).
+Reuso: ``odin validate`` es el preflight manual recomendado antes de
+``odin run`` (que no lo invoca: reporta los fallos por base durante la
+ejecución) y el modo servicio (Etapa 6) lo reutilizará para validar la recarga
+en caliente de la configuración.
 """
 
 from __future__ import annotations

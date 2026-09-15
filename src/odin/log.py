@@ -17,9 +17,9 @@ Enmascarado (visión §6 Seguridad): ``SecretMasker`` es una utilidad pura
 (sin efectos secundarios al importar, no toca el logger global) que
 reemplaza por ``***`` cada secreto no vacío de
 ``Config.iter_secret_fields()`` y vacía el cuerpo de bloques PEM
-``PRIVATE KEY`` aunque su contenido no esté listado. Está pensada para
-reutilizarse en los correos de ejecución de la Etapa 5 (implementado en
-``odin.notify``).
+``PRIVATE KEY`` aunque su contenido no esté listado. Se reutiliza como segunda
+barrera en los correos de ejecución de la Etapa 5 (``odin.notify``) y en los
+resúmenes de consola enmascarados de ``odin.cli``.
 
 Cola de log del informe (Item 041): ``TailBufferHandler`` captura las últimas
 ``notification.log_tail_lines`` líneas ya formateadas en un

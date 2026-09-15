@@ -94,13 +94,13 @@ MaskFn = Callable[[str], str]
 def build_parser() -> argparse.ArgumentParser:
     """Construye el parser raíz de la CLI de ODIN.
 
-    Subcomandos registrados hoy: ``validate`` y ``run``. Punto de extensión:
-    en este ``subparsers`` se agregará ``service`` (install/uninstall/start/
-    stop/status del modo residente, Etapas 6-7) cuando llegue su etapa, con
-    sus propios argumentos y reutilizando la resolución
-    ``--config``/``ODIN_CONFIG`` de este módulo. Cuando lleguen la compresión
-    (Etapa 3), la transferencia (Etapa 4) y el correo (Etapa 5), ``run``
-    pasará a orquestar el pipeline completo en ``odin.pipeline``.
+    Subcomandos registrados hoy: ``validate`` y ``run`` — este último ya
+    orquesta el pipeline completo de las Etapas 2-5 (respaldo, compresión,
+    transferencia, correo y retención local) en ``odin.pipeline``. Punto de
+    extensión: en este ``subparsers`` se agregará ``service``
+    (install/uninstall/start/stop/status del modo residente, Etapas 6-7)
+    cuando llegue su etapa, con sus propios argumentos y reutilizando la
+    resolución ``--config``/``ODIN_CONFIG`` de este módulo.
     """
     parser = argparse.ArgumentParser(
         prog="odin",
