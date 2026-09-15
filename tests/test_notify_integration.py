@@ -9,29 +9,33 @@ catcher: es el sustituto local de "correo recibido en la casilla de control".
 
 La variante con Firebird real por Docker (patrón del Item 018) corre el flujo
 ``gbak + 7z + correo`` completo contra el catcher y se salta sin fallo cuando
-Docker, su daemon o ``gbak`` no están disponibles.
+Docker o su daemon no están disponibles. El ``gbak`` que se usa es el de la
+propia imagen (helper ``tests.firebird_container``), así que no se requiere
+``gbak`` en el host.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import shutil
-import subprocess
-import time
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from odin.backup import BackupExecutor, BackupResult, BatchBackupResult
+from odin.backup import BackupResult, BatchBackupResult
 from odin.cli import ENV_CONFIG_VAR, EXIT_INTERNAL, EXIT_OK, main
 from odin.config import DatabaseConfig, load_config
-from odin.gbak_finder import find_gbak
 from odin.log import LOG_FILENAME, LOGGER_NAME
 from odin.retention import RetentionResult
 from odin.transfer import TransferResult
+from tests.firebird_container import (
+    DOCKER,
+    FirebirdContainer,
+    FirebirdContainerError,
+    modern_image,
+)
 from tests.smtp_catcher import SmtpCatcher, closed_port, parse_message
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -40,13 +44,9 @@ LINUX_FIXTURE = FIXTURES / "config_valid_linux.json"
 PAYLOAD = b"ODIN notify integration payload " * 32
 TIMESTAMP = "20260915_120000"
 
-DOCKER = shutil.which("docker")
-GBACK = find_gbak()
 CONTAINER = "odin-notify-integration"
-IMAGE = "firebirdsql/firebird:latest"
 FIREBIRD_PASSWORD = "masterkey"
 FIREBIRD_DATABASE = "odin_notify_integration.fdb"
-FIREBIRD_PATH = f"/var/lib/firebird/data/{FIREBIRD_DATABASE}"
 
 
 @pytest.fixture(autouse=True)
@@ -214,75 +214,45 @@ def test_run_with_unreachable_smtp_exits_1_without_crashing(
     assert "Correo NO enviado" in log_content
 
 
-def _docker(*args: str) -> subprocess.CompletedProcess[str]:
-    assert DOCKER is not None
-    return subprocess.run([DOCKER, *args], capture_output=True, text=True)
-
-
-def _wait_for_firebird(port: int, tmp_path: Path) -> None:
-    """Espera a que Firebird acepte un ``gbak`` real (retry hasta 60 s)."""
-    assert GBACK is not None
-    database = DatabaseConfig(
-        name="odin_notify_probe",
-        connection=f"localhost/{port}:{FIREBIRD_PATH}",
-        user="sysdba",
-        password=FIREBIRD_PASSWORD,
-    )
-    executor = BackupExecutor(GBACK, timeout=60)
-    probe = tmp_path / "probe.fbk"
-    deadline = time.monotonic() + 60
-    result = executor.run_backup(database.name, database.connection, str(probe), database)
-    while not result.success and time.monotonic() < deadline:
-        time.sleep(3)
-        result = executor.run_backup(database.name, database.connection, str(probe), database)
-    if not result.success:
-        pytest.skip(f"Firebird no respondió a tiempo: {result.error_message}")
-
-
-def _point_to_firebird(config_path: Path, port: str) -> None:
+def _point_to_firebird(config_path: Path, container: FirebirdContainer) -> None:
     """Redirige la base del fixture al contenedor Firebird del test."""
     data = json.loads(config_path.read_text(encoding="utf-8"))
-    data["databases"][0]["connection"] = f"localhost/{port}:{FIREBIRD_PATH}"
+    data["databases"][0]["connection"] = container.database_spec()
     data["databases"][0]["user"] = "SYSDBA"
     data["databases"][0]["password"] = FIREBIRD_PASSWORD
+    data["databases"][0]["gbak_path"] = str(
+        container.gbak_wrapper(config_path.parent / "gbak-notify")
+    )
     config_path.write_text(json.dumps(data), encoding="utf-8")
 
 
 @pytest.mark.integration
 @pytest.mark.skipif(DOCKER is None, reason="Docker no instalado en el host")
-@pytest.mark.skipif(GBACK is None, reason="gbak no instalado en el host")
 def test_run_end_to_end_with_firebird_and_local_catcher(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     catcher = SmtpCatcher()
-    _docker("rm", "-f", CONTAINER)
-    started = _docker(
-        "run",
-        "--name",
-        CONTAINER,
-        "-d",
-        "-P",
-        "-e",
-        f"FIREBIRD_ROOT_PASSWORD={FIREBIRD_PASSWORD}",
-        "-e",
-        f"FIREBIRD_DATABASE={FIREBIRD_DATABASE}",
-        IMAGE,
+    container = FirebirdContainer(
+        modern_image(),
+        name=CONTAINER,
+        mount=tmp_path,
+        root_password=FIREBIRD_PASSWORD,
+        database_name=FIREBIRD_DATABASE,
     )
     try:
-        if started.returncode != 0:
-            pytest.skip(f"No se pudo iniciar el contenedor Firebird: {started.stderr.strip()}")
-        mapped = _docker("port", CONTAINER, "3050/tcp").stdout.strip()
-        if not mapped:
-            pytest.skip("Docker no publicó el puerto 3050 del contenedor")
-        port = mapped.rsplit(":", 1)[1]
-        _wait_for_firebird(int(port), tmp_path)
+        container.start()
+    except FirebirdContainerError as exc:
+        catcher.close()
+        pytest.skip(f"No se pudo iniciar el contenedor Firebird: {exc}")
+    try:
+        container.wait_ready()
         config_path = _write_config(tmp_path, smtp_port=catcher.port, servers=False)
-        _point_to_firebird(config_path, port)
+        _point_to_firebird(config_path, container)
 
         exit_code = main(["run", "--config", str(config_path)])
     finally:
         catcher.close()
-        _docker("rm", "-f", CONTAINER)
+        container.remove()
 
     captured = capsys.readouterr()
     assert exit_code == EXIT_OK
