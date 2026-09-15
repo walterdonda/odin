@@ -4,7 +4,7 @@
 
 **Leyenda:** 📋 Planificado · 🚧 En progreso · ✅ Completo · ⏸️ Diferido · ❌ Excluido
 
-**Última actualización:** 2026-09-15 (Etapa 6 - Lote C cerrado: items 055-056 ✅ — recarga en caliente con validación previa (`odin service reload`, SIGUSR1/archivo de control, job `reload-watcher`) y test de integración del scheduler con el SMTP efímero; suite 493 passed + 2 skipped)
+**Última actualización:** 2026-09-15 (Etapa 6 ✅ - Lote D cerrado: items 057-058 — demo end-to-end en foreground (`odin service run` real, correo por ciclo, `service status` en vivo, SIGTERM limpio y variante gated de cron real `* * * * *`) y documentación/cierre con la sección del scheduler en el README, revisión de docstrings y verificación de los criterios de la etapa; gates 495 passed + 3 skipped)
 ---
 
 ## Resumen por Etapa
@@ -16,7 +16,7 @@
 | 3 | Compresión 7z | ✅ |
 | 4 | Transferencia SFTP con paramiko | ✅ |
 | 5 | Notificación por correo y flujo end-to-end one-shot | ✅ |
-| 6 | Scheduler interno | 🚧 |
+| 6 | Scheduler interno | ✅ |
 | 7 | Modo servicio: Windows Service y daemon Linux | 🚧 |
 | 8 | Matriz Firebird, empaquetado uv y documentación final | 🚧 |
 
@@ -133,7 +133,7 @@ Estado: ✅
 
 ## Etapa 6 — Scheduler interno
 
-Estado: 🚧
+Estado: ✅
 
 ### Entregables
 - ✅ `src/odin/scheduler.py` sobre APScheduler (o stdlib si la evaluación lo recomienda) — Items 049-051 ✅: helpers de calendario `cron_trigger`/`next_fire_times` (Item 049) y `SchedulerService` sobre APScheduler 3.11.3 (Item 050: `BlockingScheduler` con la timezone global, un job por `jobs[]` con id `job-N`/`max_instances=1`/`replace_existing=True`, `start()`/`shutdown()` bloqueante e idempotente, `cycle_runner` inyectable `(Config, SchedulerJob) -> CycleOutcome` con excepción encapsulada y `last_outcomes`) más el registro in-flight `InFlightRegistry` y las políticas de misfire (Item 051); decisión 3.x vs 4.x vs stdlib documentada en el docstring del módulo
@@ -143,12 +143,14 @@ Estado: 🚧
 - ✅ Test de integración del scheduler con el SMTP efímero (Item 056 ✅: `tests/test_scheduler_integration.py` — `SchedulerService` + `PipelineCycleRunner` + `run_pipeline` + `EmailNotifier` reales con fases dobles disparan por `run_job`: correo ÉXITO con el resumen del ciclo, `scheduler_state.json` con último ciclo + próximo disparo y sin secretos en mensaje/log/estado; caso FALLO con recuperación (2 correos, servicio operativo) —; catcher extraído a `tests/smtp_catcher.py` y reutilizado por `tests/test_notify_integration.py`; 4 passed + 1 skipped entre ambas integraciones)
 - ✅ CLI: `odin service run` (foreground) y `odin service status` básico vía archivo de estado en `work_dir` (Item 052 ✅: estado consultable `ServiceState`/`JobState`/`CycleRecord` + `SchedulerStateStore` en `scheduler.py` — escritura atómica `tempfile.mkstemp`+`os.replace` con limpieza del temporal, lectura tolerante `StateLoadResult` con `warning` (ausente/corrupto/esquema desconocido), vigencia por `os.kill(pid, 0)` —siempre viva en Windows—, máscara de secretos al registrar y `recent_errors` acotado; `CycleOutcome.status` (`CycleStatus`) derivado de `skipped`/`partial`/`success`; 14 tests en `tests/test_scheduler_state.py`. Item 053 ✅: subcomando `service` con `run`/`status` en `cli.py` — `run` exige `scheduler.enabled: true`, arranca `SchedulerService` en primer plano con estado persistido, `SIGINT`/`SIGTERM` vía `_stop_signals` → shutdown + estado final + exit 0 (config inválida → 2, error interno → 1); `status` lee `scheduler_state.json` y presenta en ejecución/detenido/sin estado, jobs, próximo disparo, último ciclo, salud y errores recientes; `SchedulerService` acepta `state_store` opcional y `_complete` persiste cada desenlace (éxito/fallo/omisión) con su próximo disparo; 112 passed en cli/scheduler/scheduler_state)
 - ✅ Cada ciclo reutiliza el pipeline con notificación propia (Item 054 ✅: `PipelineCycleRunner` en `scheduler.py` — filtra `config.databases` por las bases del job efectivo con la config del ciclo vía `dataclasses.replace` (la del servicio queda intacta), invoca `run_pipeline` con su correo y retención e inyecta `run`/opciones para tests e integración; traduce el resultado a `CycleOutcome` con estado global `CycleStatus` (éxito/parcial/fallo; prioridad del error de compresión > transferencia > respaldo), bases ejecutadas, duración y `notification_sent`; la excepción imprevista del pipeline la aísla el servicio y queda en `recent_errors`; secretos enmascarados en log y estado; 8 tests nuevos en `tests/test_scheduler.py`)
+- ✅ Demo end-to-end en foreground con cadencia real de 1–2 minutos (Item 057 ✅: `tests/test_scheduler_foreground.py` con `odin service run` real en primer plano — CLI → `SchedulerService` → `PipelineCycleRunner` → `run_pipeline` → `EmailNotifier` — contra el catcher SMTP in-process y fases externas dobles: (1) dos ciclos con cadencia acortada (`modify_job` + `IntervalTrigger`), dos correos `[ODIN] ÉXITO`, estado actualizado tras cada ciclo, `odin service status` en vivo con "en ejecución (pid …)"/Salud OK/último ciclo y parada limpia con `EXIT_OK`; (2) proceso real en subproceso que responde a SIGTERM con exit 0 y estado final `stale`; (3) caso gated `ODIN_FOREGROUND_DEMO=1` con cron real `* * * * *` que corre dos ciclos en 78.6 s (evidencia ejecutada). README con la demo manual de 1–2 minutos; `uv run pytest tests/test_scheduler_foreground.py -q` → 2 passed + 1 skipped en ~3.7 s y la variante gated en 78.6 s)
+- ✅ Documentación y cierre de la Etapa 6 (Item 058 ✅: README con la sección "Scheduler interno y modo servicio en primer plano" — bloque `scheduler` con tabla de campos, operación `run|status|reload`, formato de `scheduler_state.json`, recarga en caliente (SIGUSR1 / archivo de control / Windows), solapamiento y misfire, relación con `odin run`, exit codes de `service` y demo manual de 1–2 minutos —; docstrings de `validate.py` (reuso real en la recarga) y `scheduler.py` (rango de items) corregidos; criterios de la etapa verificados con evidencia y gates 495 passed + 3 skipped)
 
 ### Criterios de aceptación
-- [ ] Demo: proceso foreground ejecuta el flujo completo en horarios cortos y envía correo por ciclo — pendiente la cadencia real en foreground (Item 057); el sustituto local y determinista ya está verde (Item 056: 2 ciclos reales por `run_job` contra el catcher SMTP, ÉXITO y FALLO + recuperación)
-- [ ] Job en ejecución no duplica respaldo de la misma base (test de solapamiento)
+- [x] Demo: proceso foreground ejecuta el flujo completo en horarios cortos y envía correo por ciclo — Item 057: `tests/test_scheduler_foreground.py` (2 passed + 1 skipped por defecto; gated `ODIN_FOREGROUND_DEMO=1` con cron real `* * * * *` → 2 ciclos en 78.6 s); el sustituto local y determinista ya estaba verde (Item 056: 2 ciclos reales por `run_job` contra el catcher SMTP, ÉXITO y FALLO + recuperación)
+- [x] Job en ejecución no duplica respaldo de la misma base (test de solapamiento) — `tests/test_scheduler.py`: `test_overlapping_job_is_skipped`, `test_skip_if_running_false_runs_only_free_databases`, `test_skip_if_running_true_skips_whole_job_if_any_base_busy`, `test_skip_if_running_false_with_all_bases_busy_is_skipped` y `test_in_flight_registry_all_or_nothing` (reserva atómica por base con `threading.Lock`; `uv run pytest tests/test_scheduler.py -q -k "overlapping or skip_if_running or in_flight"` → 5 passed)
 - [x] Recarga con config válida actualiza disparos sin reinicio; config inválida mantiene la vigente — Item 055: `tests/test_scheduler.py` (recarga válida con `next_fire_time` recalculado con reloj fijo y jobs altas/bajas aplicados; cron inválido y ERROR de entorno rechazados conservando `service.config`/triggers y registrando el motivo; archivo de control consumido de forma idempotente) + `tests/test_cli.py` (`service reload` → 0 con SIGUSR1, 1 sin servicio, archivo de control sin señal); `uv run pytest tests/test_scheduler.py tests/test_scheduler_state.py tests/test_cli.py -q` → **128 passed**
-- [ ] Tests con reloj falso: disparos, misfire, solapamiento
+- [x] Tests con reloj falso: disparos, misfire, solapamiento — `tests/test_scheduler.py` con `now`/reloj inyectable: `test_next_fire_times_*` (reloj fijo, DST, fecha imposible, exactamente en `now`), `test_misfire_skip_discards_late_fire` / `test_misfire_run_once_executes_late_fire` / `test_misfire_policies_configure_apscheduler_job` y los de solapamiento con `threading.Event`; evidencia combinada: `uv run pytest tests/test_scheduler.py -q -k "overlapping or skip_if_running or misfire or next_fire_times or in_flight or reload"` → **22 passed**, 18 deselected
 
 ---
 
@@ -242,16 +244,21 @@ Estado: 🚧
 
 ## Próximo Paso
 
-La **Etapa 6 está en curso**: la `queue-006.md` está creada (items 049-058) y
-sus **Lotes A (049-051), B (052-054) y C (055-056) quedaron cerrados** — núcleo
-del scheduler, políticas `skip_if_running`/`on_misfire`, estado del servicio en
-`work_dir/scheduler_state.json`, CLI `odin service run|status`, `PipelineCycleRunner`
-real sobre `run_pipeline` con correo propio por ciclo, recarga en caliente
-(`odin service reload` con SIGUSR1 o archivo de control) y test de integración
-del scheduler contra el catcher SMTP efímero — con la suite en **493 passed + 2
-skipped**.
+La **Etapa 6 quedó cerrada** con los cuatro lotes de `queue-006.md` (items
+049-058): núcleo del scheduler sobre APScheduler 3.11.3, políticas
+`skip_if_running`/`on_misfire`, estado del servicio en
+`work_dir/scheduler_state.json`, CLI `odin service run|status|reload`,
+`PipelineCycleRunner` real sobre `run_pipeline` con correo y retención por
+ciclo, recarga en caliente (SIGUSR1 o archivo de control), tests de integración
+con el catcher SMTP efímero y la demo end-to-end en foreground con cadencia real
+de 1 minuto (gated `ODIN_FOREGROUND_DEMO=1`). Gates finales: `uv run pytest` →
+**495 passed + 3 skipped** (los 3 skips requieren gbak/Firebird o habilitar la
+demo lenta), `uv run ruff check src/odin tests` y `uv run mypy src/odin` en
+verde; el comportamiento en Windows real sigue delegado a la Etapa 8 (Item
+009).
 
 Siguiente: en una **nueva sesión de chat** ejecutar
-`/speckit.aide.execute-batch 057,058` (Lote D de `queue-006.md`: demo end-to-end
-en foreground con cadencia real de 1-2 minutos y cierre/documentación de la
-Etapa 6).
+`/speckit.aide.create-queue` para generar la `queue-007.md` de la **Etapa 7 —
+Modo servicio (Windows Service y daemon Linux)**, que arrancará en el item 059
+con `odin service install|uninstall|start|stop`, la unit systemd de referencia
+y el `service status` completo en ambas plataformas.
