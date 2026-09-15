@@ -13,6 +13,36 @@ compresión 7z, transferencia SFTP (paramiko) y notificación por correo.
   servidor instalado); la [guía de compatibilidad Firebird](docs/firebird.md)
   cubre la matriz 2.5 → 6 y la resolución de `gbak_path` por plataforma
 
+## Quickstart por plataforma
+
+El **gate único** de desarrollo y CI es `scripts/verify.py`: corre `uv sync`,
+la suite de tests, `ruff`, `mypy` y `odin validate` sobre los dos ejemplos,
+con salida por paso (comando, duración, estado), resumen final y exit code 0
+solo si todo pasa. Es solo stdlib y el mismo archivo en ambas plataformas
+(`uv` se resuelve del `PATH`; en Windows es `uv.exe`).
+
+**Linux LTS** (bash):
+
+```bash
+uv sync
+uv run python scripts/verify.py                       # gate completo
+uv run python scripts/verify.py --quick               # omite los tests @integration
+uv run python scripts/verify.py --skip-sync --only pytest
+```
+
+**Windows Server** (PowerShell):
+
+```powershell
+uv sync
+uv run python scripts\verify.py                       # gate completo
+uv run python scripts\verify.py --quick               # omite los tests @integration
+uv run python scripts\verify.py --skip-sync --only pytest
+```
+
+`--help` documenta los flags (`--skip-sync`, `--quick`, `--only <id>`; ids:
+`sync`, `pytest`, `ruff`, `mypy`, `validate-linux`, `validate-windows`). La
+CI (`.github/workflows/ci.yml`, Item 073) usará este mismo script como gate.
+
 ## Compatibilidad de dependencias (Python 3.14)
 
 Se ha verificado la compatibilidad de las dependencias principales con Python 3.14. La resolución de paquetes mediante `uv` garantiza que los wheels adecuados para Windows y Linux se instalan correctamente.
@@ -25,19 +55,19 @@ Se ha verificado la compatibilidad de las dependencias principales con Python 3.
 | `py7zr` | 1.1.3 | `>=3.10` | Linux: `import py7zr` OK. |
 | `apscheduler` | 3.11.3 | `>=3.8` | Linux: `import apscheduler` OK. |
 | `pywin32` | 312 | `>=3.11` | Windows (estático): `uv.lock` contiene wheels `cp314` para `win32/amd64/arm64`. |
+| `tzdata` | 2026.3 | — (wheel universal `py2.py3`) | Datos IANA para `zoneinfo`; Item 072: sin datos del SO (contenedor Linux mínimo) `odin validate` fallaba, y Windows tampoco trae tzdata del SO. |
 
 **Decisión de versionado:**
 - Se ha subido el floor de `pywin32` a `>=311` en `pyproject.toml` para reflejar el soporte real de wheels `cp314` en Python 3.14.
+- Se agregó `tzdata` como dependencia directa (Item 072): `zoneinfo` la necesita para `scheduler.timezone`/cron cuando el SO no trae la base IANA (contenedores Linux mínimos y Windows); con datos del SO actúa solo como fallback.
 - Se mantiene `requires-python >= 3.14`.
 - La confirmación runtime en Windows Server se realizará en el **Item 009**.
 
 *Nota: El test `tests/test_deps_compat.py` actúa como un invariante para prevenir regresiones en la compatibilidad.*
 
-```bash
-uv sync              # instala dependencias y crea uv.lock
-uv run pytest        # ejecuta la suite de tests
-uv run odin --version
-```
+El ciclo de desarrollo completo se verifica con el gate único
+[`scripts/verify.py`](#quickstart-por-plataforma); `uv run odin --version`
+está incluido en el quickstart.
 
 El modo servicio residente tiene su guía operativa completa en
 [`docs/service.md`](docs/service.md); la verificación de instalación desde
