@@ -14,18 +14,12 @@ Docker, su daemon o ``gbak`` no están disponibles.
 
 from __future__ import annotations
 
-import base64
-import email
 import json
 import logging
 import shutil
-import socket
-import socketserver
 import subprocess
-import threading
 import time
 from collections.abc import Iterator, Sequence
-from email import policy
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +32,7 @@ from odin.gbak_finder import find_gbak
 from odin.log import LOG_FILENAME, LOGGER_NAME
 from odin.retention import RetentionResult
 from odin.transfer import TransferResult
+from tests.smtp_catcher import SmtpCatcher, closed_port, parse_message
 
 FIXTURES = Path(__file__).parent / "fixtures"
 LINUX_FIXTURE = FIXTURES / "config_valid_linux.json"
@@ -70,126 +65,6 @@ def clean_odin_logger() -> Iterator[None]:
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Aísla los tests de un ``ODIN_CONFIG`` presente en el entorno real."""
     monkeypatch.delenv(ENV_CONFIG_VAR, raising=False)
-
-
-def _b64(text: str) -> str:
-    return base64.b64encode(text.encode("ascii")).decode("ascii")
-
-
-class _SmtpHandler(socketserver.StreamRequestHandler):
-    """Sesión SMTP mínima: EHLO, AUTH LOGIN, MAIL/RCPT, DATA y QUIT."""
-
-    server: _SmtpCatcher
-
-    def handle(self) -> None:
-        try:
-            self._serve()
-        except (OSError, ValueError) as exc:
-            self.server.errors.append(exc)
-
-    def _serve(self) -> None:
-        self._reply("220 odin-test ESMTP")
-        while True:
-            raw = self.rfile.readline()
-            if not raw:
-                return
-            parts = raw.decode("ascii", "replace").strip().split(" ", 1)
-            verb = parts[0].upper()
-            argument = parts[1] if len(parts) > 1 else ""
-            if verb in ("EHLO", "HELO"):
-                self._reply("250-odin-test")
-                self._reply("250-AUTH LOGIN")
-                self._reply("250 OK")
-            elif verb == "AUTH":
-                self._auth(argument)
-            elif verb in ("MAIL", "RCPT"):
-                target = self._address(argument)
-                if verb == "MAIL":
-                    self.server.senders.append(target)
-                else:
-                    self.server.recipients.append(target)
-                self._reply("250 OK")
-            elif verb == "DATA":
-                self._reply("354 End data with <CR><LF>.<CR><LF>")
-                self.server.messages.append(self._read_data())
-                self._reply("250 OK")
-            elif verb == "QUIT":
-                self._reply("221 Bye")
-                return
-            else:
-                self._reply("250 OK")
-
-    def _auth(self, argument: str) -> None:
-        """Acepta ``AUTH LOGIN`` con respuesta inicial o por desafío."""
-        pieces = argument.split()
-        if not pieces or pieces[0].upper() != "LOGIN":
-            self._reply("504 Unrecognized authentication type")
-            return
-        if len(pieces) > 1:
-            username = self._decode(pieces[1])
-        else:
-            self._reply(f"334 {_b64('Username:')}")
-            username = self._decode(self._read_auth_value())
-        self._reply(f"334 {_b64('Password:')}")
-        password = self._decode(self._read_auth_value())
-        self.server.auth.append((username, password))
-        self._reply("235 Authentication successful")
-
-    def _read_auth_value(self) -> str:
-        return self.rfile.readline().decode("ascii", "replace").strip()
-
-    def _read_data(self) -> str:
-        lines: list[bytes] = []
-        while True:
-            line = self.rfile.readline()
-            if not line or line in (b".\r\n", b".\n"):
-                break
-            lines.append(line)
-        return b"".join(lines).decode("utf-8", "replace")
-
-    @staticmethod
-    def _address(argument: str) -> str:
-        """Extrae la dirección de ``MAIL FROM:<...>``/``RCPT TO:<...>``."""
-        _, _, address = argument.partition(":")
-        return address.strip().strip("<>")
-
-    @staticmethod
-    def _decode(value: str) -> str:
-        return base64.b64decode(value).decode("utf-8", "replace")
-
-    def _reply(self, text: str) -> None:
-        self.wfile.write(f"{text}\r\n".encode("ascii"))
-
-
-class _SmtpCatcher(socketserver.ThreadingTCPServer):
-    """Servidor SMTP efímero en un hilo: captura lo que ODIN entrega."""
-
-    allow_reuse_address = True
-    daemon_threads = True
-
-    def __init__(self) -> None:
-        super().__init__(("127.0.0.1", 0), _SmtpHandler)
-        self.messages: list[str] = []
-        self.senders: list[str] = []
-        self.recipients: list[str] = []
-        self.auth: list[tuple[str, str]] = []
-        self.errors: list[BaseException] = []
-        self._thread = threading.Thread(target=self.serve_forever, daemon=True)
-        self._thread.start()
-
-    @property
-    def port(self) -> int:
-        return int(self.server_address[1])
-
-    def close(self) -> None:
-        self.shutdown()
-        self.server_close()
-        self._thread.join(timeout=5)
-
-
-def _parse_message(raw: str) -> email.message.Message:
-    """Parsea el mensaje capturado decodificando cabeceras/cuerpo MIME."""
-    return email.message_from_string(raw, policy=policy.default)
 
 
 def _write_config(
@@ -281,18 +156,11 @@ def _install_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("odin.pipeline.RetentionExecutor", _FakeRetentionExecutor)
 
 
-def _closed_port() -> int:
-    """Reserva y libera un puerto loopback: la conexión será rechazada."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
-
-
 @pytest.mark.integration
 def test_run_delivers_report_through_real_smtp_without_secrets(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    catcher = _SmtpCatcher()
+    catcher = SmtpCatcher()
     try:
         config_path = _write_config(tmp_path, smtp_port=catcher.port)
         _install_fakes(monkeypatch)
@@ -312,7 +180,7 @@ def test_run_delivers_report_through_real_smtp_without_secrets(
     assert len(catcher.messages) == 1
 
     raw = catcher.messages[0]
-    message = _parse_message(raw)
+    message = parse_message(raw)
     assert message["To"] == "control@example.com"
     assert message["From"] == "odin-backups@example.com"
     assert str(message["Subject"]).startswith("[ODIN] ÉXITO")
@@ -331,7 +199,7 @@ def test_run_delivers_report_through_real_smtp_without_secrets(
 def test_run_with_unreachable_smtp_exits_1_without_crashing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    config_path = _write_config(tmp_path, smtp_port=_closed_port())
+    config_path = _write_config(tmp_path, smtp_port=closed_port())
     _install_fakes(monkeypatch)
 
     exit_code = main(["run", "--config", str(config_path)])
@@ -386,7 +254,7 @@ def _point_to_firebird(config_path: Path, port: str) -> None:
 def test_run_end_to_end_with_firebird_and_local_catcher(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    catcher = _SmtpCatcher()
+    catcher = SmtpCatcher()
     _docker("rm", "-f", CONTAINER)
     started = _docker(
         "run",
@@ -422,7 +290,7 @@ def test_run_end_to_end_with_firebird_and_local_catcher(
     assert catcher.errors == []
     assert catcher.recipients == ["control@example.com"]
     assert len(catcher.messages) == 1
-    body = _parse_message(catcher.messages[0]).get_content()
+    body = parse_message(catcher.messages[0]).get_content()
     assert "Estado global: ÉXITO" in body
     assert "- erp_principal: OK" in body
     assert "Servidores destino: ninguno configurado." in body
