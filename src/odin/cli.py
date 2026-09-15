@@ -1,4 +1,4 @@
-"""Interfaz de línea de comandos de ODIN (Items 005, 006, 013 y 019).
+"""Interfaz de línea de comandos de ODIN (Items 005, 006, 013, 019 y 053).
 
 Subcomando ``validate``: carga y valida el JSON de configuración
 (``odin.config.load_config``, Item 002), ejecuta la validación completa del
@@ -19,9 +19,16 @@ a todos los servidores culminan bien (Items 025 y 035). El informe se envía
 **siempre** (éxito, parcial o fallo); un SMTP caído no crashea: queda en el
 log y en el resumen, y degrada el exit code 0 a 1. Después del correo corre la
 retención local (``odin.retention.RetentionExecutor``, Item 046): es una
-función secundaria cuyos errores se reportan pero no alteran el exit code. El
-subcomando ``service`` (Etapas 6-7) aún no se registra; el punto de extensión
-queda documentado en ``build_parser``.
+función secundaria cuyos errores se reportan pero no alteran el exit code.
+
+Subcomando ``service`` (Item 053): ``run`` arranca el scheduler interno en
+primer plano (``odin.scheduler.SchedulerService``) con el estado consultable
+en ``local.work_dir/scheduler_state.json``; ``SIGINT``/``SIGTERM`` detienen
+limpio (shutdown + estado final) con exit 0. ``status`` lee ese estado y
+presenta última ejecución, próximo disparo, salud y errores recientes; es una
+consulta: devuelve 0 mientras la lectura sea posible, con aviso si el proceso
+ya no corre o no hay estado. El modo servicio del SO (install/start/stop)
+llega en la Etapa 7.
 
 Convención de exit codes (constantes exportadas de este módulo):
 
@@ -49,10 +56,15 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 import sys
+import threading
 import traceback
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
+from datetime import UTC, datetime
 from logging import Logger
+from typing import Any
 
 from odin import __version__
 from odin.backup import BatchBackupResult
@@ -61,6 +73,13 @@ from odin.log import SecretMasker, setup_logging
 from odin.notify import NotificationResult
 from odin.pipeline import PipelineResult, run_pipeline
 from odin.retention import RetentionResult
+from odin.scheduler import (
+    SchedulerService,
+    SchedulerStateStore,
+    load_state,
+    render_service_status,
+    state_path,
+)
 from odin.validate import (
     Severity,
     ValidationReport,
@@ -89,18 +108,20 @@ EXIT_FAILURE = 4
 ENV_CONFIG_VAR = "ODIN_CONFIG"
 
 MaskFn = Callable[[str], str]
+ServiceFactory = Callable[..., SchedulerService]
 
 
 def build_parser() -> argparse.ArgumentParser:
     """Construye el parser raíz de la CLI de ODIN.
 
-    Subcomandos registrados hoy: ``validate`` y ``run`` — este último ya
-    orquesta el pipeline completo de las Etapas 2-5 (respaldo, compresión,
-    transferencia, correo y retención local) en ``odin.pipeline``. Punto de
-    extensión: en este ``subparsers`` se agregará ``service``
-    (install/uninstall/start/stop/status del modo residente, Etapas 6-7)
-    cuando llegue su etapa, con sus propios argumentos y reutilizando la
-    resolución ``--config``/``ODIN_CONFIG`` de este módulo.
+    Subcomandos registrados hoy: ``validate``, ``run`` — este último orquesta el
+    pipeline completo de las Etapas 2-5 (respaldo, compresión, transferencia,
+    correo y retención local) en ``odin.pipeline`` — y ``service`` (Item 053)
+    con las acciones ``run`` (scheduler en primer plano) y ``status`` (consulta
+    del estado en ``work_dir``). Punto de extensión: sobre ``service`` llegarán
+    ``reload`` (Item 055) e ``install``/``uninstall``/``start``/``stop`` del modo
+    residente del SO (Etapa 7), reutilizando la resolución
+    ``--config``/``ODIN_CONFIG`` de este módulo.
     """
     parser = argparse.ArgumentParser(
         prog="odin",
@@ -155,6 +176,54 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=f"ruta al JSON de configuración; si se omite, usa la variable {ENV_CONFIG_VAR}.",
     )
+    service_parser = subparsers.add_parser(
+        "service",
+        help="Ejecuta el scheduler en primer plano o consulta su estado.",
+        description=(
+            "Modo servicio del scheduler interno: 'run' ejecuta el scheduler en primer "
+            "plano (hasta SIGINT/SIGTERM) con las políticas de solapamiento y misfire "
+            "del bloque scheduler del JSON, y 'status' consulta el estado persistido en "
+            "local.work_dir/scheduler_state.json (última ejecución, próximo disparo, "
+            "salud y errores recientes). El modo residente del SO (install/start/stop) "
+            "llega en la Etapa 7."
+        ),
+    )
+    service_actions = service_parser.add_subparsers(dest="service_action", title="acciones")
+    service_run_parser = service_actions.add_parser(
+        "run",
+        help="Ejecuta el scheduler en primer plano hasta SIGINT/SIGTERM.",
+        description=(
+            "Carga y valida la configuración, configura el logging y arranca el "
+            "scheduler bloqueante: cada job dispara el pipeline completo por el "
+            "subconjunto de bases configurado y cada ciclo envía su propio informe. "
+            "SIGINT/SIGTERM detienen el servicio limpiamente (shutdown del scheduler y "
+            "escritura final del estado) con exit code 0; una configuración inválida "
+            "devuelve 2 y un error interno 1. Requiere scheduler.enabled: true."
+        ),
+    )
+    service_run_parser.add_argument(
+        "--config",
+        metavar="RUTA",
+        default=None,
+        help=f"ruta al JSON de configuración; si se omite, usa la variable {ENV_CONFIG_VAR}.",
+    )
+    service_status_parser = service_actions.add_parser(
+        "status",
+        help="Consulta el estado del servicio (scheduler_state.json).",
+        description=(
+            "Lee local.work_dir/scheduler_state.json y presenta si el servicio corre "
+            "(o quedó un estado obsoleto de un proceso muerto), la configuración, cada "
+            "job con su próximo disparo y último ciclo, la salud y los errores "
+            "recientes. Sin estado o con el archivo ilegible informa el motivo sin "
+            "fallar."
+        ),
+    )
+    service_status_parser.add_argument(
+        "--config",
+        metavar="RUTA",
+        default=None,
+        help=f"ruta al JSON de configuración; si se omite, usa la variable {ENV_CONFIG_VAR}.",
+    )
     return parser
 
 
@@ -169,6 +238,27 @@ def _resolve_config_source(args: argparse.Namespace) -> str | None:
     if raw is None or not raw.strip():
         return None
     return raw
+
+
+def _load_config_or_report(source: str | None) -> Config | None:
+    """Carga la configuración de ``source`` o imprime el motivo y devuelve ``None``.
+
+    Unifica la resolución ``--config``/``ODIN_CONFIG`` de ``validate``/``run``
+    con la de ``service``: ``None`` (falta la fuente) y ``ConfigError`` se
+    reportan en stderr y el llamador traduce a ``EXIT_CONFIG``.
+    """
+    if source is None:
+        print(
+            "No se indicó el archivo de configuración: use --config <ruta> "
+            f"o defina la variable de entorno {ENV_CONFIG_VAR}.",
+            file=sys.stderr,
+        )
+        return None
+    try:
+        return load_config(source)
+    except ConfigError as exc:
+        print(exc, file=sys.stderr)
+        return None
 
 
 def _setup_logging_or_warn(config: Config) -> Logger | None:
@@ -511,6 +601,140 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return EXIT_FAILURE
 
 
+@contextmanager
+def _stop_signals() -> Iterator[None]:
+    """Instala ``SIGINT``/``SIGTERM`` para detener el servicio y restaura los previos.
+
+    El handler levanta ``KeyboardInterrupt`` en el hilo principal —donde el
+    ``BlockingScheduler`` está bloqueado— y ``_cmd_service_run`` lo traduce en
+    un shutdown limpio con exit 0. Fuera del hilo principal (uso embebido en
+    tests) no toca las señales globales, que solo el hilo principal puede
+    configurar; un SO que rechace el handler simplemente conserva el previo.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def _raise_interrupt(signum: int, frame: Any) -> None:
+        raise KeyboardInterrupt
+
+    previous: dict[signal.Signals, Any] = {}
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            previous[sig] = signal.getsignal(sig)
+            signal.signal(sig, _raise_interrupt)
+        except (ValueError, OSError):
+            continue
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def _build_scheduler_service(
+    config: Config, *, state_store: SchedulerStateStore
+) -> SchedulerService:
+    """Fábrica real del servicio para ``odin service run`` (Item 053).
+
+    Importa ``PipelineCycleRunner`` en forma diferida: el runner real del
+    pipeline llega en el Item 054 y la CLI con dobles (tests) no debe
+    depender de su construcción. El import queda como punto de extensión
+    explícito de este cableado.
+    """
+    from odin.scheduler import PipelineCycleRunner
+
+    return SchedulerService(
+        config, cycle_runner=PipelineCycleRunner(), state_store=state_store
+    )
+
+
+def _cmd_service_run(
+    args: argparse.Namespace, *, service_factory: ServiceFactory | None = None
+) -> int:
+    """Ejecuta ``odin service run``: scheduler en primer plano con estado (Item 053).
+
+    Orden: carga de configuración (``scheduler.enabled: false`` es un error de
+    configuración: el modo servicio no está habilitado), logging, store del
+    Item 052 y arranque bloqueante. El estado inicial se persiste antes de
+    arrancar y el final en el ``finally`` —también si ``start()`` falla por una
+    excepción imprevista, que ``main`` traduce a exit 1—. ``SIGINT``/``SIGTERM``
+    (o un ``KeyboardInterrupt`` directo) paran el servicio con exit 0.
+    ``service_factory`` es inyectable para tests; el default arma el servicio
+    real.
+    """
+    source = _resolve_config_source(args)
+    config = _load_config_or_report(source)
+    if config is None:
+        return EXIT_CONFIG
+    if not config.scheduler.enabled:
+        print(
+            "El scheduler está deshabilitado (scheduler.enabled: false): "
+            "habilítelo para usar 'odin service run'.",
+            file=sys.stderr,
+        )
+        return EXIT_CONFIG
+
+    logger = _setup_logging_or_warn(config)
+    store = SchedulerStateStore(
+        state_path(config.local.work_dir),
+        pid=os.getpid(),
+        config_path=str(config.config_path),
+        started_at=datetime.now(UTC),
+        mask=SecretMasker.from_config(config).mask,
+    )
+    factory = service_factory or _build_scheduler_service
+    service = factory(config, state_store=store)
+    store.save()
+    if logger is not None:
+        logger.info(
+            "Servicio en primer plano: %d job(s); estado en %s",
+            len(config.scheduler.jobs),
+            store.path,
+        )
+    try:
+        with _stop_signals():
+            service.start()
+    except KeyboardInterrupt:
+        if logger is not None:
+            logger.info("Señal de parada recibida: deteniendo el scheduler")
+    finally:
+        service.shutdown()
+        store.save()
+    return EXIT_OK
+
+
+def _cmd_service_status(args: argparse.Namespace) -> int:
+    """Ejecuta ``odin service status``: consulta el estado del servicio (Item 053).
+
+    Es una consulta de solo lectura: exit 0 mientras la configuración cargue y
+    el estado se pueda interpretar (o su ausencia se informe). ``render_service_status``
+    distingue servicio en ejecución, estado obsoleto (pid muerto) y sin estado.
+    """
+    source = _resolve_config_source(args)
+    config = _load_config_or_report(source)
+    if config is None:
+        return EXIT_CONFIG
+    result = load_state(state_path(config.local.work_dir))
+    print(render_service_status(result))
+    return EXIT_OK
+
+
+def _cmd_service(args: argparse.Namespace) -> int:
+    """Despacha las acciones de ``odin service`` (``run``/``status``)."""
+    action = args.service_action
+    if action == "run":
+        return _cmd_service_run(args)
+    if action == "status":
+        return _cmd_service_status(args)
+    print(
+        "Acción de 'service' requerida: run (scheduler en primer plano) o "
+        "status (consulta del estado).",
+        file=sys.stderr,
+    )
+    return EXIT_CONFIG
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Ejecuta la CLI y devuelve el exit code (convención en el docstring del módulo).
 
@@ -534,6 +758,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _cmd_validate(args)
         if args.command == "run":
             return _cmd_run(args)
+        if args.command == "service":
+            return _cmd_service(args)
         raise RuntimeError(f"subcomando no implementado: {args.command!r}")
     except ConfigError as exc:
         print(exc, file=sys.stderr)

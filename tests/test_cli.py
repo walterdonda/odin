@@ -13,9 +13,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import posixpath
+import signal
 import sys
 from collections.abc import Callable, Iterator, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -30,12 +33,19 @@ from odin.cli import (
     EXIT_INTERNAL,
     EXIT_OK,
     EXIT_PARTIAL,
+    _stop_signals,
     main,
 )
-from odin.config import load_config
+from odin.config import Config, load_config
 from odin.log import LOG_FILENAME, LOGGER_NAME
 from odin.notify import NotificationResult, ReportMessage
 from odin.retention import RetentionError, RetentionResult
+from odin.scheduler import (
+    CycleOutcome,
+    SchedulerStateStore,
+    load_state,
+    state_path,
+)
 from odin.transfer import TransferResult
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -1133,3 +1143,233 @@ def test_run_masks_retention_error_secrets(
     assert "***" in captured.err
     log_path = load_config(config_path).local.resolved_log_dir / LOG_FILENAME
     assert "masterkey" not in log_path.read_text(encoding="utf-8")
+
+
+# --- Item 053: subcomando service (run en primer plano y status) ---
+
+DEAD_PID = 2**31 - 1
+
+
+class _FakeSchedulerService:
+    """Doble de ``SchedulerService``: modela el bloqueo y la señal de parada."""
+
+    def __init__(self, *, state_store: Any, raise_interrupt: bool) -> None:
+        self.state_store = state_store
+        self.raise_interrupt = raise_interrupt
+        self.started = False
+        self.shutdown_calls = 0
+
+    def start(self) -> None:
+        self.started = True
+        if self.raise_interrupt:
+            raise KeyboardInterrupt
+
+    def shutdown(self, *, wait: bool = True) -> None:
+        self.shutdown_calls += 1
+
+
+def _install_fake_service(
+    monkeypatch: pytest.MonkeyPatch, *, raise_interrupt: bool = True
+) -> list[_FakeSchedulerService]:
+    """Reemplaza la fábrica real del CLI por un doble que registra el estado."""
+    created: list[_FakeSchedulerService] = []
+
+    def factory(config: Config, *, state_store: SchedulerStateStore) -> Any:
+        for index, job in enumerate(config.scheduler.jobs):
+            state_store.register_job(f"job-{index}", job, next_fire_time=None)
+        service = _FakeSchedulerService(
+            state_store=state_store, raise_interrupt=raise_interrupt
+        )
+        created.append(service)
+        return service
+
+    monkeypatch.setattr("odin.cli._build_scheduler_service", factory)
+    return created
+
+
+def _write_service_state(config_path: Path, *, pid: int) -> Path:
+    """Persiste un estado del servicio con un job y un ciclo exitoso."""
+    config = load_config(config_path)
+    store = SchedulerStateStore(
+        state_path(config.local.work_dir),
+        pid=pid,
+        config_path=str(config.config_path),
+        started_at=datetime(2026, 9, 15, 9, 0, tzinfo=UTC),
+        clock=lambda: datetime(2026, 9, 15, 10, 0, tzinfo=UTC),
+    )
+    store.register_job(
+        "job-0",
+        config.scheduler.jobs[0],
+        next_fire_time=datetime(2026, 9, 16, 2, 0, tzinfo=UTC),
+    )
+    store.record_cycle(
+        "job-0",
+        CycleOutcome(
+            job_databases=("erp_principal",),
+            databases=("erp_principal",),
+            success=True,
+            duration_seconds=1.2,
+            notification_sent=True,
+        ),
+        next_fire_time=datetime(2026, 9, 17, 2, 0, tzinfo=UTC),
+    )
+    return store.save()
+
+
+def test_service_without_action_exits_2_with_usage(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["service"]) == EXIT_CONFIG
+    err = capsys.readouterr().err
+    assert "run" in err
+    assert "status" in err
+
+
+def test_service_run_missing_config_source_exits_2(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["service", "run"]) == EXIT_CONFIG
+    assert "No se indicó el archivo de configuración" in capsys.readouterr().err
+
+
+def test_service_run_disabled_scheduler_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(
+        tmp_path, mutate=lambda data: data["scheduler"].update(enabled=False)
+    )
+    assert main(["service", "run", "--config", str(config_path)]) == EXIT_CONFIG
+    captured = capsys.readouterr()
+    assert "deshabilitado" in captured.err
+    assert not (tmp_path / "work" / "scheduler_state.json").exists()
+
+
+def test_service_run_invalid_config_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(
+        tmp_path, mutate=lambda data: data["scheduler"].update(jobs="no-es-lista")
+    )
+    assert main(["service", "run", "--config", str(config_path)]) == EXIT_CONFIG
+    assert "scheduler.jobs" in capsys.readouterr().err
+
+
+def test_service_run_starts_and_stops_on_signal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+    created = _install_fake_service(monkeypatch, raise_interrupt=True)
+
+    assert main(["service", "run", "--config", str(config_path)]) == EXIT_OK
+    assert len(created) == 1
+    service = created[0]
+    assert service.started is True
+    assert service.shutdown_calls == 1
+
+    config = load_config(config_path)
+    result = load_state(state_path(config.local.work_dir))
+    assert result.state is not None
+    assert result.state.pid == os.getpid()
+    assert [job.job_id for job in result.state.jobs] == ["job-0"]
+    assert "en primer plano" in (
+        config.local.resolved_log_dir / LOG_FILENAME
+    ).read_text(encoding="utf-8")
+
+
+def test_service_run_persists_state_when_start_returns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = _write_config(tmp_path)
+    created = _install_fake_service(monkeypatch, raise_interrupt=False)
+
+    assert main(["service", "run", "--config", str(config_path)]) == EXIT_OK
+    assert created[0].started is True
+    assert created[0].shutdown_calls == 1
+    state_file = load_config(config_path).local.work_dir / "scheduler_state.json"
+    assert state_file.exists()
+
+
+def test_service_run_internal_error_still_shuts_down_and_saves_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+
+    class FailingService:
+        def __init__(self) -> None:
+            self.shutdown_calls = 0
+
+        def start(self) -> None:
+            raise RuntimeError("fallo inesperado del executor")
+
+        def shutdown(self, *, wait: bool = True) -> None:
+            self.shutdown_calls += 1
+
+    service = FailingService()
+
+    def factory(config: Config, *, state_store: SchedulerStateStore) -> Any:
+        state_store.register_job("job-0", config.scheduler.jobs[0])
+        return service
+
+    monkeypatch.setattr("odin.cli._build_scheduler_service", factory)
+
+    assert main(["service", "run", "--config", str(config_path)]) == EXIT_INTERNAL
+    assert service.shutdown_calls == 1
+    state_file = load_config(config_path).local.work_dir / "scheduler_state.json"
+    assert state_file.exists()
+    assert "Error interno inesperado" in capsys.readouterr().err
+
+
+def test_stop_signals_installs_and_restores_handlers() -> None:
+    previous = signal.getsignal(signal.SIGTERM)
+    with _stop_signals():
+        handler = signal.getsignal(signal.SIGTERM)
+        assert handler is not previous
+        with pytest.raises(KeyboardInterrupt):
+            handler(signal.SIGTERM, None)
+    assert signal.getsignal(signal.SIGTERM) is previous
+
+
+def test_service_status_renders_running_state(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+    _write_service_state(config_path, pid=os.getpid())
+
+    assert main(["service", "status", "--config", str(config_path)]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert f"Servicio ODIN: en ejecución (pid {os.getpid()})" in out
+    assert "job-0 [erp_principal] schedule '0 2 * * *'" in out
+    assert "Próximo disparo: 2026-09-17T02:00:00+00:00" in out
+    assert "Último ciclo: success en 1.2 s (erp_principal; correo enviado)" in out
+    assert "Salud: OK" in out
+
+
+def test_service_status_reports_stale_state(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    if sys.platform.startswith("win"):
+        pytest.skip("la vigencia del pid no se verifica en Windows")
+    config_path = _write_config(tmp_path)
+    _write_service_state(config_path, pid=DEAD_PID)
+
+    assert main(["service", "status", "--config", str(config_path)]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert f"Servicio ODIN: detenido (pid {DEAD_PID} ya no está en ejecución)" in out
+    assert "job-0" in out
+
+
+def test_service_status_without_state_reports_reason(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path)
+    assert main(["service", "status", "--config", str(config_path)]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "Servicio ODIN: sin estado" in out
+    assert "Motivo:" in out
+
+
+def test_service_status_missing_config_exits_2(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["service", "status"]) == EXIT_CONFIG
+    assert "No se indicó el archivo de configuración" in capsys.readouterr().err

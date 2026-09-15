@@ -10,22 +10,32 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pytest
 
+from odin.backup import BackupResult, BatchBackupResult
 from odin.config import Config, SchedulerJob, load_config
+from odin.log import SecretMasker, setup_logging
+from odin.notify import NotificationResult
+from odin.pipeline import PipelineResult
 from odin.scheduler import (
     CycleOutcome,
+    CycleStatus,
     InFlightRegistry,
+    PipelineCycleRunner,
     SchedulerService,
+    SchedulerStateStore,
     cron_trigger,
+    load_state,
     next_fire_times,
+    state_path,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -479,3 +489,319 @@ def test_misfire_policies_configure_apscheduler_job(tmp_path: Path) -> None:
     assert skip.coalesce is True
     assert skip.misfire_grace_time == 1
 
+
+
+# --- estado del servicio (Items 052-053) ---
+
+
+def _state_store(config: Config) -> SchedulerStateStore:
+    """Store de estado con reloj fijo para los tests del servicio."""
+    return SchedulerStateStore(
+        state_path(config.local.work_dir),
+        pid=os.getpid(),
+        config_path=str(config.config_path),
+        started_at=FIXED_NOW,
+        clock=lambda: FIXED_NOW,
+    )
+
+
+def test_service_with_state_store_persists_cycle_and_next_fire(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    store = _state_store(config)
+    service = SchedulerService(
+        config,
+        cycle_runner=FakeRunner(),
+        now=lambda: FIXED_NOW,
+        state_store=store,
+    )
+
+    outcome = service.run_job("job-0")
+    assert outcome.status is CycleStatus.SUCCESS
+    result = load_state(store.path)
+    assert result.state is not None
+    assert result.state.pid == os.getpid()
+    job = result.state.jobs[0]
+    assert job.last_cycle is not None
+    assert job.last_cycle.status is CycleStatus.SUCCESS
+    assert job.last_cycle.databases == ("erp_principal",)
+    assert job.next_fire_time is not None
+    assert result.state.recent_errors == ()
+
+
+def test_service_state_records_skipped_cycle_without_error(tmp_path: Path) -> None:
+    config = _config(
+        tmp_path,
+        jobs=[
+            {
+                "databases": ["erp_principal"],
+                "schedule": "* * * * *",
+                "on_misfire": "skip",
+            }
+        ],
+    )
+    now = [FIXED_NOW]
+    store = _state_store(config)
+    service = SchedulerService(
+        config,
+        cycle_runner=FakeRunner(),
+        now=lambda: now[0],
+        state_store=store,
+    )
+
+    now[0] = FIXED_NOW + timedelta(minutes=5)
+    outcome = service.run_job("job-0")
+    assert outcome.status is CycleStatus.SKIPPED
+    state = store.snapshot()
+    assert state.jobs[0].last_cycle is not None
+    assert state.jobs[0].last_cycle.status is CycleStatus.SKIPPED
+    assert state.recent_errors == ()
+
+
+def test_service_without_state_store_does_not_write_state(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    service = SchedulerService(config, cycle_runner=FakeRunner(), now=lambda: FIXED_NOW)
+    service.run_job("job-0")
+    assert not state_path(config.local.work_dir).exists()
+
+
+# --- runner real del ciclo sobre el pipeline (Item 054) ---
+
+
+class FakePipeline:
+    """Doble de ``run_pipeline``: registra la config/opciones y devuelve/levanta."""
+
+    def __init__(
+        self, result: PipelineResult | None = None, error: Exception | None = None
+    ) -> None:
+        self.calls: list[Config] = []
+        self.options: list[dict[str, Any]] = []
+        self._result = result
+        self._error = error
+
+    def __call__(self, config: Config, **options: Any) -> PipelineResult:
+        self.calls.append(config)
+        self.options.append(options)
+        if self._error is not None:
+            raise self._error
+        assert self._result is not None
+        return self._result
+
+
+def _backup_result(
+    name: str,
+    success: bool = True,
+    *,
+    error_message: str | None = None,
+    compression_error_message: str | None = None,
+    transfer_error_message: str | None = None,
+) -> BackupResult:
+    if success:
+        return BackupResult(
+            success=True,
+            database_name=name,
+            backup_path=Path(f"/work/{name}.fbk"),
+            file_size_bytes=100,
+            duration_seconds=0.1,
+            archive_path=Path(f"/work/{name}.fbk.7z"),
+            compressed_size_bytes=40,
+            compression_duration_seconds=0.1,
+        )
+    return BackupResult(
+        success=False,
+        database_name=name,
+        duration_seconds=0.1,
+        error_message=error_message,
+        compression_error_message=compression_error_message,
+        transfer_error_message=transfer_error_message,
+    )
+
+
+def _pipeline_result(
+    *results: BackupResult, notification_success: bool = True
+) -> PipelineResult:
+    return PipelineResult(
+        backup=BatchBackupResult(
+            results=list(results),
+            success=bool(results) and all(result.success for result in results),
+            total_duration_seconds=0.2,
+        ),
+        transfers={},
+        notification=NotificationResult(
+            success=notification_success,
+            recipient="control@example.com",
+            duration_seconds=0.1,
+        ),
+    )
+
+
+def test_pipeline_runner_uses_only_job_databases(tmp_path: Path) -> None:
+    config = _config(tmp_path, second_database=True)
+    pipeline = FakePipeline(_pipeline_result(_backup_result("erp_principal")))
+    runner = PipelineCycleRunner(pipeline, backup="doble-respaldo")
+
+    outcome = runner(config, config.scheduler.jobs[0])
+
+    assert len(pipeline.calls) == 1
+    cycle_config = pipeline.calls[0]
+    assert [database.name for database in cycle_config.databases] == ["erp_principal"]
+    assert [database.name for database in config.databases] == [
+        "erp_principal",
+        "erp_secundaria",
+    ]
+    assert cycle_config is not config
+    assert pipeline.options == [{"backup": "doble-respaldo"}]
+    assert outcome.status is CycleStatus.SUCCESS
+    assert outcome.success is True
+    assert outcome.databases == ("erp_principal",)
+    assert outcome.job_databases == ("erp_principal",)
+    assert outcome.notification_sent is True
+    assert outcome.error_message is None
+    assert outcome.duration_seconds >= 0.0
+
+
+def test_pipeline_runner_reports_partial_cycle(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    pipeline = FakePipeline(
+        _pipeline_result(
+            _backup_result("erp_principal"),
+            _backup_result(
+                "erp_secundaria",
+                success=False,
+                compression_error_message="disco lleno",
+            ),
+        )
+    )
+    job = SchedulerJob(
+        databases=["erp_principal", "erp_secundaria"], schedule="0 2 * * *"
+    )
+
+    outcome = PipelineCycleRunner(pipeline)(config, job)
+
+    assert outcome.status is CycleStatus.PARTIAL
+    assert outcome.success is False
+    assert outcome.partial is True
+    assert outcome.databases == ("erp_principal", "erp_secundaria")
+    assert outcome.error_message == "erp_secundaria: disco lleno"
+
+
+def test_pipeline_runner_reports_total_failure(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    pipeline = FakePipeline(
+        _pipeline_result(
+            _backup_result(
+                "erp_principal",
+                success=False,
+                transfer_error_message="host inalcanzable",
+            ),
+            notification_success=False,
+        )
+    )
+
+    outcome = PipelineCycleRunner(pipeline)(config, config.scheduler.jobs[0])
+
+    assert outcome.status is CycleStatus.FAILURE
+    assert outcome.notification_sent is False
+    assert outcome.error_message == "erp_principal: host inalcanzable"
+
+
+def test_pipeline_runner_reports_not_executed_batch(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    result = PipelineResult(
+        backup=BatchBackupResult(
+            results=[],
+            success=False,
+            total_duration_seconds=0.0,
+            error_message="work_dir no creable",
+        ),
+        transfers={},
+    )
+    outcome = PipelineCycleRunner(FakePipeline(result))(config, config.scheduler.jobs[0])
+
+    assert outcome.status is CycleStatus.FAILURE
+    assert outcome.databases == ()
+    assert outcome.error_message == "work_dir no creable"
+
+
+def test_pipeline_runner_reports_empty_selection(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    job = SchedulerJob(databases=["base_fantasma"], schedule="0 2 * * *")
+    pipeline = FakePipeline(_pipeline_result())
+
+    outcome = PipelineCycleRunner(pipeline)(config, job)
+
+    assert pipeline.calls[0].databases == []
+    assert outcome.status is CycleStatus.FAILURE
+    assert outcome.databases == ()
+    assert outcome.error_message is not None
+    assert "lote vacío" in outcome.error_message
+    assert "base_fantasma" in outcome.error_message
+
+
+def test_pipeline_runner_exception_is_isolated_and_recorded(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    store = _state_store(config)
+    service = SchedulerService(
+        config,
+        cycle_runner=PipelineCycleRunner(FakePipeline(error=RuntimeError("boom"))),
+        now=lambda: FIXED_NOW,
+        state_store=store,
+    )
+
+    first = service.run_job("job-0")
+    assert first.status is CycleStatus.FAILURE
+    assert first.error_message is not None
+    assert "boom" in first.error_message
+    second = service.run_job("job-0")
+    assert second.status is CycleStatus.FAILURE
+    assert service.last_outcomes["job-0"] is second
+    state = store.snapshot()
+    assert state.jobs[0].last_cycle is not None
+    assert state.jobs[0].last_cycle.status is CycleStatus.FAILURE
+    assert len(state.recent_errors) == 2
+    assert "boom" in state.recent_errors[0]
+
+
+def test_pipeline_runner_masks_secrets_in_log_and_state(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    secret = config.databases[0].password
+    assert secret
+    store = SchedulerStateStore(
+        state_path(config.local.work_dir),
+        pid=os.getpid(),
+        config_path=str(config.config_path),
+        started_at=FIXED_NOW,
+        mask=SecretMasker.from_config(config).mask,
+        clock=lambda: FIXED_NOW,
+    )
+    service = SchedulerService(
+        config,
+        cycle_runner=PipelineCycleRunner(
+            FakePipeline(
+                _pipeline_result(
+                    _backup_result(
+                        "erp_principal",
+                        success=False,
+                        error_message=f"gbak falló con {secret}",
+                    )
+                )
+            )
+        ),
+        now=lambda: FIXED_NOW,
+        state_store=store,
+    )
+    odin_logger = setup_logging(config)
+    try:
+        outcome = service.run_job("job-0")
+    finally:
+        for handler in list(odin_logger.handlers):
+            odin_logger.removeHandler(handler)
+            handler.close()
+
+    assert outcome.status is CycleStatus.FAILURE
+    log_path = config.local.resolved_log_dir / "odin.log"
+    log = log_path.read_text(encoding="utf-8")
+    assert secret not in log
+    assert "***" in log
+    state_text = store.path.read_text(encoding="utf-8")
+    assert secret not in state_text
+    assert "***" in state_text
