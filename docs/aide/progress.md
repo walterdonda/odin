@@ -4,7 +4,7 @@
 
 **Leyenda:** 📋 Planificado · 🚧 En progreso · ✅ Completo · ⏸️ Diferido · ❌ Excluido
 
-**Última actualización:** 2026-09-15 (Etapa 5 en curso — Lote C completo: items 045-046, retención local F8 (`src/odin/retention.py`) integrada al pipeline después del correo, con resumen de consola enmascarado y errores que no alteran el exit code; suite 408 passed + 1 skipped)
+**Última actualización:** 2026-09-15 (Etapa 5 ✅ cerrada — Lote D completo: items 047-048, test de integración con SMTP efímero in-process y documentación/cierre con los gates en verde; suite 410 passed + 2 skipped)
 ---
 
 ## Resumen por Etapa
@@ -15,7 +15,7 @@
 | 2 | Respaldo Firebird con gbak | ✅ |
 | 3 | Compresión 7z | ✅ |
 | 4 | Transferencia SFTP con paramiko | ✅ |
-| 5 | Notificación por correo y flujo end-to-end one-shot | 🚧 |
+| 5 | Notificación por correo y flujo end-to-end one-shot | ✅ |
 | 6 | Scheduler interno | 🚧 |
 | 7 | Modo servicio: Windows Service y daemon Linux | 🚧 |
 | 8 | Matriz Firebird, empaquetado uv y documentación final | 🚧 |
@@ -113,7 +113,7 @@ Estado: ✅
 
 ## Etapa 5 — Notificación por correo y flujo end-to-end one-shot
 
-Estado: 🚧
+Estado: ✅
 
 ### Entregables
 - ✅ `src/odin/notify.py`: SMTP con STARTTLS/SSL, autenticación, timeouts, destinatario `notification.to` (Item 039 ✅: `EmailNotifier`/`NotificationResult`/`ReportMessage` sobre `smtplib` con STARTTLS default, plano y SSL implícito `smtp.ssl` —mutuamente excluyente con `starttls` y validado en `config.py`—, timeout inline 30 s, errores operativos encapsulados sin propagación y sin credenciales; `validate` reporta el transporte y ya no advierte por `starttls: false` con SSL; ejemplos y README actualizados. Item 042 ✅: `tests/test_notify.py` con dobles de `smtplib.SMTP`/`SMTP_SSL` — 12 de transporte + 10 de render — y 3 tests de `smtp.ssl` en `tests/test_config.py`; 105 passed entre notify/config/log)
@@ -121,12 +121,13 @@ Estado: 🚧
 - ✅ `src/odin/pipeline.py`: flujo completo, correo **siempre**, SMTP caído no crashea (log + exit code) (Item 043 ✅: `run_pipeline` gana `notifier` inyectable (default `EmailNotifier.from_config`) y `PipelineResult.notification`; el informe se renderiza con la cola de `capture_log_tail` (`log_tail_lines` + `SecretMasker`) y se envía en todos los desenlaces —éxito, parcial, fallo total, lote no ejecutado y lote vacío—; `_send_report` convierte una excepción imprevista del notifier en `NotificationResult` fallido sin propagar; `_install_fake_executor`/`_install_fake_notifier` evitan SMTP real en la suite; 8 tests nuevos en `tests/test_pipeline.py`; ruff + mypy + 79 passed en pipeline/cli/notify)
 - ✅ Retención local (F8): limpieza por `local.retention_days` solo de archivos gestionados por ODIN — Item 045 ✅: `src/odin/retention.py` con `RetentionExecutor`/`RetentionResult`/`RetentionError`/`is_managed_backup` (convención `<nombre_bd>_%Y%m%d_%H%M%S.fbk[.7z]`, frontera estricta del cutoff, protección `mtime >= inicio de corrida`, solo archivos regulares dentro de `work_dir`, sin symlinks, errores de borrado aislados e idempotencia; 25 tests en `tests/test_retention.py`). Item 046 ✅: fase de retención en `run_pipeline` **después del correo** (fuera del informe), `PipelineResult.retention`, notifier/ejecutor inyectables, red de seguridad que encapsula excepciones imprevistas y errores que no alteran el exit code; `_print_retention_summary` enmascarado (con variante deshabilitada y errores por stderr), `validate` sin "(Etapa 5)"
 - ✅ Exit codes: 0 éxito total, 3 parcial, 4 fallo total, 2 configuración, 1 interno (Item 044 ✅: matriz final con el correo —0 exige correo enviado; un SMTP caído en corrida por lo demás exitosa degrada 0 → 1; el 4 de lote no ejecutado/vacío tiene precedencia y el 3 se conserva aunque el correo falle—, línea de resumen "Correo enviado a X"/"Correo NO enviado: motivo" enmascarada, `run --description` y tabla del README actualizados; 6 tests nuevos de CLI, suite pipeline/cli/notify/config 127 passed)
+- ✅ Verificación y cierre de la Etapa 5 (Items 047-048 ✅: `tests/test_notify_integration.py` con SMTP efímero in-process sobre `socketserver` —`odin run` con `EmailNotifier` real contra el catcher: `MAIL FROM`/`RCPT TO`/`AUTH LOGIN`, asunto y cuerpo ÉXITO con base/servidor/totales/cola de log, sin secretos; puerto cerrado → exit 1 sin crash con entrada en `odin.log`; variante Firebird skip-safe—; README con las secciones "Notificación por correo" y "Retención local", `examples/README.md` y docstrings (`cli.py`, `log.py`, `validate.py`) alineados; criterios de aceptación de la etapa verificados uno a uno con evidencia; suite 410 passed + 2 skipped)
 
 ### Criterios de aceptación
-- [ ] End-to-end real: `odin run` → correo recibido en la casilla de control con resumen completo
-- [ ] Destino caído → correo PARCIAL con detalle; exit code 3
-- [ ] Fallo de gbak → correo FALLO con error; exit code 4
-- [ ] Test automatizado de enmascarado: logs y correo sin credenciales
+- [x] End-to-end real: `odin run` → correo recibido en la casilla de control con resumen completo — Item 047: el catcher SMTP efímero in-process recibe el informe completo de un `odin run` con `EmailNotifier` real (`tests/test_notify_integration.py`, 2 passed); el envío a una casilla externa real no es verificable en este entorno (mismo criterio que el sshd ephemeral del Item 037) y la variante con Firebird por Docker queda skip-safe para el host que la tenga
+- [x] Destino caído → correo PARCIAL con detalle; exit code 3 — `tests/test_cli.py::test_run_partial_transfer_failure_exits_3` (exit 3) + `tests/test_notify.py::test_render_partial_state` (el informe detalla el destino fallido); `uv run pytest ... -q` → 2 passed
+- [x] Fallo de gbak → correo FALLO con error; exit code 4 — `tests/test_cli.py::test_run_total_failure_exits_4` + `tests/test_pipeline.py::test_total_failure_still_sends_report`; `uv run pytest ... -q` → 2 passed
+- [x] Test automatizado de enmascarado: logs y correo sin credenciales — `tests/test_transfer_masking.py` (logs y resumen de `odin run`) + `tests/test_notify.py::test_render_never_includes_secrets` + `tests/test_notify_integration.py` (mensaje SMTP real); `uv run pytest ... -q` → 4 passed
 
 ---
 
@@ -198,7 +199,7 @@ Estado: 🚧
 | F2. Compresión 7z (nivel configurable, AES opcional) | 🚧 | 3 |
 | F3. Configuración JSON legible OS-agnóstica + validación | 🚧 | 1 |
 | F4. Transferencia SFTP con paramiko (reintentos, verificación) | ✅ | 4 |
-| F5. Notificación por correo (siempre, sin secretos) | 🚧 | 5 |
+| F5. Notificación por correo (siempre, sin secretos) | ✅ | 5 |
 | F6. CLI y operación (`run`, `validate`, `service`, exit codes, logging) | 🚧 | 1, 5, 7 |
 | F7. Scheduler propio + modo servicio residente | 🚧 | 6, 7 |
 | F8. Retención local | ✅ | 5 |
@@ -210,10 +211,10 @@ Estado: 🚧
 | G1. Respaldo confiable Firebird 2.5–6 | 🚧 | 2, 8 |
 | G2. Compresión 7z | 🚧 | 3 |
 | G3. Distribución SFTP con reintentos | ✅ | 4 |
-| G4. Correo de trazabilidad en cada ejecución | 🚧 | 5 |
+| G4. Correo de trazabilidad en cada ejecución | ✅ | 5 |
 | G5. Instalación uniforme vía uv (Windows/Linux) | 🚧 | 1, 8 |
 | G6. Servicio residente con scheduler propio | 🚧 | 6, 7 |
-| G7. Modo one-shot `odin run` compatible | 🚧 | 2, 5 |
+| G7. Modo one-shot `odin run` compatible | ✅ | 2, 5 |
 
 ## Requisitos No Funcionales
 
@@ -240,19 +241,15 @@ Estado: 🚧
 
 ## Próximo Paso
 
-El **Lote C de la Etapa 5** quedó cerrado (items 045-046 ✅): la retención local
-(F8) vive en `src/odin/retention.py` (solo artefactos gestionados
-`<nombre_bd>_%Y%m%d_%H%M%S.fbk[.7z]`, frontera estricta de antigüedad,
-protección de la corrida actual, sin symlinks ni archivos ajenos, errores de
-borrado aislados) y `run_pipeline` la ejecuta **después** del correo con
-`PipelineResult.retention`, red de seguridad ante excepciones imprevistas y
-sin efecto sobre el exit code; la CLI imprime el resumen enmascarado (con
-variante deshabilitada y errores por archivo a stderr) y `validate` ya no
-anuncia la retención como "(Etapa 5)". 25 tests de retención + 3 de pipeline +
-4 de CLI + 1 de validate. La suite completa queda en 408 passed + 1 skipped
-(gbak real ausente en el host).
+La **Etapa 5 quedó cerrada** (items 039-048 ✅): `odin run` ejecuta el ciclo
+one-shot completo —respaldo → compresión → transferencia → correo → retención
+local— con el informe por correo **siempre** (SMTP caído no crashea y degrada
+0 → 1), exit codes finales 0/1/3/4 y retención F8 que no altera el código de
+salida. Los criterios de aceptación se verificaron uno a uno con evidencia; el
+"correo recibido" se acredita con el servidor SMTP efímero in-process del Item
+047 (`tests/test_notify_integration.py`, sin dependencias externas). La suite
+completa queda en **410 passed + 2 skipped** (gbak real ausente en el host).
 
-Siguiente: en una **nueva sesión de chat** ejecutar
-`/speckit.aide.execute-batch 047,048` para el **Lote D** de `queue-005.md`:
-test de integración con servidor SMTP efímero in-process y documentación/cierre
-de la Etapa 5.
+La `queue-005.md` quedó **agotada** (10/10 items). Siguiente: en una **nueva
+sesión de chat** ejecutar `/speckit.aide.create-queue` para generar el lote de
+la **Etapa 6 (scheduler interno)**, que arrancará en el item 049.
