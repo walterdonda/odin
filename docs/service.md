@@ -338,7 +338,7 @@ proceso arranca igual con una advertencia y los `print` se descartan.
 La suite automatizada cubre el ciclo de vida de Windows con dobles de
 `win32serviceutil`/`win32service` (no hay Windows real en desarrollo). El
 arranque en boot y la recuperación ante caída se verifican con este runbook en
-un **Windows Server real** (Etapa 8 / Item 009):
+un **Windows Server real** (Etapa 8 / Item 074; ver §9 para la evidencia):
 
 1. `odin validate --config C:\odin\config.json` → sin errores.
 2. `odin service install --config C:\odin\config.json` (consola elevada).
@@ -356,11 +356,79 @@ un **Windows Server real** (Etapa 8 / Item 009):
 El equivalente Linux (sobrevivir un reinicio del SO) se verifica análogamente
 con `systemctl reboot` y `systemctl is-enabled odin`; la variante automatizada
 del reinicio ante caída es la demo gated `ODIN_SERVICE_DEMO=1` de
-`tests/test_service_linux_integration.py`.
+`tests/test_service_linux_integration.py`. La evidencia de las corridas
+(automática en CI y manual por runbook) se registra en §9.
 
 ---
 
-## 9. Referencias
+## 9. Evidencia de verificación (Item 074)
+
+Estado de la **verificación en limpio en Windows Server** y cierre del
+**Item 009** (smoke multiplataforma). En este entorno de desarrollo solo hay
+Linux: no hay Windows Server ni remoto publicado, así que la corrida real
+queda **delegada** al job `windows` de la CI (`.github/workflows/ci.yml`,
+Item 073) o al runbook de §8, con el mismo criterio de salvedades que las
+Etapas 5 y 7.
+
+### 9.1 Ejecutado (Linux, 2026-09-15)
+
+| Verificación | Comando | Resultado |
+|---|---|---|
+| Gestor Windows con dobles de pywin32 | `uv run pytest tests/test_service_windows.py -q` | 31 passed |
+| Escenario real del SCM: recolección y salto seguro | `uv run pytest tests/test_service_windows_integration.py -q` | 1 skipped (solo Windows) |
+| Contrato del workflow de CI | `uv run pytest tests/test_ci_workflow.py -q` | 6 passed |
+| Gate único del proyecto | `uv run python scripts/verify.py` | EXIT 0 (6 pasos) |
+
+Detalles de la preparación:
+
+- **Escenario gated del servicio Windows**
+  (`tests/test_service_windows_integration.py`, Item 073): con
+  `ODIN_WINDOWS_SERVICE_SMOKE=1` en un Windows real recorre
+  `odin service install → start → status → stop → uninstall` contra el SCM,
+  con una configuración de scheduler y **fases externas dobles** (`gbak`
+  *stub*, `servers: []` y SMTP local del catcher in-process), y afirma un
+  correo `[ODIN] ÉXITO`, el `scheduler_state.json` con el último ciclo y el
+  estado del SCM (en ejecución, arranque automático, reinicio ante caída).
+  Fuera de Windows o sin la variable se salta con motivo: no altera la suite
+  local.
+- **CI**: el job `linux` y el job `windows` corren el gate único del Item 071
+  y publican el wheel; el job `windows` exporta `ODIN_WINDOWS_SERVICE_SMOKE=1`
+  para el escenario anterior. El workflow se activa al publicar el
+  repositorio, usa `permissions: contents: read` y no consume secretos.
+- **Host del servicio**: se revisó el wheel de pywin32 312
+  (`LocatePythonServiceExe` copia `pythonservice.exe` al prefijo del entorno y
+  `pywintypesNNN.dll` junto a la DLL de Python), de modo que `odin service
+  install` desde el entorno de `uv sync` no requiere `pywin32_postinstall`.
+
+### 9.2 Delegado: corrida real en Windows Server
+
+Vía A (recomendada): publicar el repositorio y dejar correr el job `windows`
+de la CI (gate completo + smoke del SCM). Vía B: ejecutar el runbook de §8 en
+un Windows Server real. La primera corrida debe completar esta evidencia:
+
+| Dato | Valor |
+|---|---|
+| Fecha / build del SO | _pendiente_ |
+| Versiones de `uv` y Python | _pendiente_ |
+| Firebird usado (real o fases dobles) | _pendiente_ |
+| `odin validate` (exit code) | _pendiente_ |
+| `install`/`start`/`status`/`stop`/`uninstall` (salidas y exit codes) | _pendiente_ |
+| Estado del SCM: `Get-Service odin`, arranque automático y failure actions | _pendiente_ |
+| Ciclo del scheduler y correo del informe | _pendiente_ |
+| Reinicio del SO: el servicio vuelve solo | _pendiente_ |
+| Caída del proceso: el SCM reinicia (failure actions) | _pendiente_ |
+| `uv tool install` desde el wheel en entorno limpio (sin el repo) | _pendiente_ |
+
+> **Salvedad:** el **Item 009** se cierra con la evidencia de Linux
+> (Items 071-072: gate `scripts/verify.py` y empaquetado limpio) y la corrida
+> real de Windows **delegada** al job `windows` de la CI (Item 073) o al
+> runbook §8; no se declara verificada una ejecución en Windows Server que no
+> ocurrió en este entorno. Esa corrida es la que aporta la confirmación
+> runtime de `pywin32`/Python 3.14 en Windows.
+
+---
+
+## 10. Referencias
 
 - `README.md` — instalación, configuración, `odin run`, notificación,
   retención, scheduler, exit codes.

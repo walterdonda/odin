@@ -4,14 +4,14 @@
 
 **Leyenda:** 📋 Planificado · 🚧 En progreso · ✅ Completo · ⏸️ Diferido · ❌ Excluido
 
-**Última actualización:** 2026-09-15 (Etapa 8 🚧 — Lote B 071-072 ✅: `scripts/verify.py` como gate único (solo stdlib, `--skip-sync`/`--quick`/`--only`, 13 tests con runner inyectado, quickstart por plataforma en el README) y verificación real de empaquetado e instalación limpia en Linux LTS (`uv build` con wheel/sdist verificados, `uv tool install` aislado en host, contenedor `ubuntu:24.04` limpio y e2e gated `ODIN_CLEAN_CONTAINER_E2E=1` con Firebird 5.0 + SFTP/SMTP ephemeral; finding real corregido: `tzdata` como dependencia directa); gates **646 passed + 7 skipped in 74.35 s** + ruff + mypy Success 19 files)
+**Última actualización:** 2026-09-15 (Etapa 8 🚧 — Lote C 073-074 ✅: `.github/workflows/ci.yml` con jobs `linux`/`windows` (checkout, `astral-sh/setup-uv` con caché, `uv sync --locked`, el gate único `scripts/verify.py`, `uv build` y el wheel como artefacto) más el smoke gated del SCM `ODIN_WINDOWS_SERVICE_SMOKE=1` (`tests/test_service_windows_integration.py`), sección "Integración continua" del README y contrato del YAML en `tests/test_ci_workflow.py` (PyYAML dev, 6 tests); verificación en limpio en Windows Server **delegada** a la CI/runbook §8 con evidencia y salvedad en `docs/service.md` §9 → **Item 009 cerrado** y **Etapa 1 ✅**; gates **652 passed + 8 skipped in 68.48 s** + ruff + mypy Success 19 files)
 ---
 
 ## Resumen por Etapa
 
 | Etapa | Nombre | Estado |
 |---|---|---|
-| 1 | Fundaciones: paquete, CLI, configuración JSON y validación | 🚧 |
+| 1 | Fundaciones: paquete, CLI, configuración JSON y validación | ✅ |
 | 2 | Respaldo Firebird con gbak | ✅ |
 | 3 | Compresión 7z | ✅ |
 | 4 | Transferencia SFTP con paramiko | ✅ |
@@ -24,7 +24,7 @@
 
 ## Etapa 1 — Fundaciones: paquete, CLI, configuración JSON y validación
 
-Estado: 🚧
+Estado: ✅
 
 ### Entregables
 - ✅ Estructura de paquete `src/odin/` (`cli.py`, `config.py`, `log.py`, `paths.py`, `validate.py`), `tests/`, README inicial — todos los módulos de la Etapa 1 implementados (Item 006 ✅: `src/odin/validate.py` con validación completa del entorno local y de coherencia — 11 familias de verificación, `Severity`/`Finding`/`ValidationReport`, renderizado agrupado `ERRORES`/`ADVERTENCIAS`/`VERIFICACIONES`, solo lectura y sin red —, `--strict` en la CLI, sección "Validación de configuración" en el README; 63 tests nuevos)
@@ -34,13 +34,13 @@ Estado: 🚧
 - ✅ Logging base: consola + archivo con rotación, nivel configurable, enmascarado de secretos (Item 004 ✅: `src/odin/log.py` con `setup_logging` idempotente — consola + `RotatingFileHandler` 5 MiB × 5 backups, nivel vía `LogLevel` — y `SecretMasker`/`MaskingFilter` puros reutilizables: secretos de `iter_secret_fields()` → `***` en ambos destinos, bloques PEM `PRIVATE KEY` vaciados por patrón; 30 tests en `tests/test_log.py`)
 - ✅ CLI argparse: `odin validate --config <ruta>` + variable de entorno `ODIN_CONFIG`; exit codes (0/2/1) (Item 005 ✅: `src/odin/cli.py` con subcomando `validate` cableado a `load_config` + `setup_logging` — fallo operativo de logging no invalida la config (exit 0 + advertencia) —, resolución `--config` → `ODIN_CONFIG` → error 2, constantes `EXIT_OK`/`EXIT_INTERNAL`/`EXIT_CONFIG`, errores imprevistos → 1 con traceback controlado, SystemExit de argparse preservado y punto de extensión documentado para `run`/`service`; 15 tests en `tests/test_cli.py`)
 - ✅ Ejemplos `examples/config.linux.json` y `examples/config.windows.json` (Item 007 ✅: fieles a la visión §5, charset `ISO8859_1`, secretos placeholder `***`, ambos con `odin validate` exit 0 en Linux — el de Windows omitiendo el `work_dir` por sabor distinto; `examples/README.md` con uso, seguridad (permisos 600/ACL, no versionar el JSON real) y campos opcionales con defaults; subsección "Ejemplos de configuración" en el README; 5 fixtures nuevos en `tests/fixtures/` —mínimo, rutas relativas+`~`, errores de tipo/rango/faltantes— y 16 tests en `tests/test_fixtures.py`)
-- 🚧 `uv sync` + `uv run pytest` funcionando en Linux y Windows — Item 071 ✅ cierra el pendiente del **Item 009 en Linux**: `scripts/verify.py` (solo stdlib, mismo archivo en ambas plataformas) corre `uv sync` → `uv run pytest` → `ruff` → `mypy` → `odin validate` sobre los dos ejemplos con salida por paso, resumen y exit 0 solo si todo pasa (`uv run python scripts/verify.py` → EXIT=0, seis pasos OK); Windows queda con el mismo script como gate (CI/Item 074)
+- ✅ `uv sync` + `uv run pytest` funcionando en Linux y Windows — Item 071 ✅ cerró el pendiente del **Item 009 en Linux** (`scripts/verify.py`, solo stdlib, mismo archivo en ambas plataformas: `uv sync` → pytest → ruff → mypy → `odin validate` con salida por paso y exit 0 solo si todo pasa; evidencia EXIT=0, seis pasos OK); **Items 073/074 ✅** cierran el item: Windows corre el mismo script en el job `windows` de `.github/workflows/ci.yml` (listo para habilitar al publicar; hoy no hay remoto) más el smoke gated del SCM `ODIN_WINDOWS_SERVICE_SMOKE=1` y el runbook §8 — salvedad de la corrida real en `docs/service.md` §9
 
 ### Criterios de aceptación
-- [x] `uv sync && uv run odin validate --config examples/config.linux.json` → exit code 0 — verificado en Linux (Item 007): ambos ejemplos dan exit 0 con advertencias no bloqueantes (JSON en 644, `work_dir` de desarrollo no creable sin root; el ejemplo Windows además omite el `work_dir` por sabor distinto). Con `--strict` dan 2 (esperado: son plantilla). Confirmación en Windows real → Item 009
+- [x] `uv sync && uv run odin validate --config examples/config.linux.json` → exit code 0 — verificado en Linux (Item 007): ambos ejemplos dan exit 0 con advertencias no bloqueantes (JSON en 644, `work_dir` de desarrollo no creable sin root; el ejemplo Windows además omite el `work_dir` por sabor distinto). Con `--strict` dan 2 (esperado: son plantilla). Confirmación en Windows: el mismo gate corre en el job `windows` de la CI (Items 073/074) y el runbook §8 — salvedad de la primera corrida real al publicar el repositorio (`docs/service.md` §9)
 - [x] JSON inválido produce mensajes específicos por campo (tipo, rango, ruta inexistente) — tipo/rango desde el Item 002 (`ConfigError.problems` con `field_path`); ruta inexistente/no creable desde el Item 006 (hallazgos ERROR/WARNING por campo, p. ej. `config.servers[1].auth.private_key`, `config.local.work_dir`)
 - [x] Tests unitarios de parseo, normalización de rutas y enmascarado de secretos — parseo (Item 002, `test_config.py`), normalización (Item 003, `test_paths.py`) y enmascarado (Item 004, `test_log.py`) verdes; el Item 007 suma la capa sobre archivos reales (`test_fixtures.py`: mínimo→defaults, errores→`field_path` específicos, rutas relativas/`~`→normalización, ejemplos→pasan `validate`)
-- [x] Compatibilidad de dependencias con Python 3.14 verificada y documentada (riesgo transversal) — verificada en Linux (Item 001; ciclo cerrado por el gate del Item 071); pendiente confirmación en Windows (Item 009, CI/Item 074)
+- [x] Compatibilidad de dependencias con Python 3.14 verificada y documentada (riesgo transversal) — verificada en Linux (Item 001; ciclo cerrado por el gate del Item 071); confirmación en Windows **delegada** al job `windows` de la CI (Items 073/074: `uv sync --locked` + gate único + smoke del SCM), con la salvedad de la primera corrida real al publicar (`docs/service.md` §9)
 
 ---
 
@@ -170,7 +170,7 @@ Estado: ✅
 - ✅ Cierre de la Etapa 7 (Item 068 ✅: criterios verificados uno a uno con evidencia —unit y `systemd-analyze verify`, ciclo de vida Linux real por la CLI, auto-recuperación de systemd re-verificada en **102.27 s**, ciclo de vida Windows con 31 tests de dobles de pywin32, `status` compuesto (99 passed en status+cli) y validación de la unit systemd—; gates finales **623 passed + 5 skipped** + ruff + mypy Success 19 files; F7/G6 en ✅, C8 cubierto con la salvedad de Windows real y `queue-008.md` anunciada desde el item 069)
 
 ### Criterios de aceptación
-- [x] Windows Server: servicio instalado y arrancado sobrevive reinicio del SO; caída recuperada automáticamente — ciclo de vida completo con dobles de `win32serviceutil`/`win32service` (Item 061: `InstallService` en `SERVICE_AUTO_START`, failure actions `SC_ACTION_RESTART` a los 5 s, `uninstall` idempotente, `start`/`stop` con espera y `status` con auto-start/política; 31 tests) y runbook de verificación en Windows Server real documentado en `docs/service.md` §8 (Item 067), a ejecutar en la Etapa 8/Item 009 —misma salvedad que la Etapa 1—; `uv run pytest tests/test_service_windows.py -q` → 31 passed
+- [x] Windows Server: servicio instalado y arrancado sobrevive reinicio del SO; caída recuperada automáticamente — ciclo de vida completo con dobles de `win32serviceutil`/`win32service` (Item 061: `InstallService` en `SERVICE_AUTO_START`, failure actions `SC_ACTION_RESTART` a los 5 s, `uninstall` idempotente, `start`/`stop` con espera y `status` con auto-start/política; 31 tests) y runbook de verificación en Windows Server real documentado en `docs/service.md` §8 (Item 067), a ejecutar en la Etapa 8 (Items 073/074: job `windows` de la CI o runbook §8; salvedad de la corrida real en `docs/service.md` §9); `uv run pytest tests/test_service_windows.py -q` → 31 passed
 - [x] Linux LTS: unit systemd activa el proceso en boot y lo reinicia ante caída — validación estructural de `deploy/odin.service` y `systemd-analyze verify` de la unit renderizada con ejecutable real (Item 066, capa 1), arranque activado con `systemctl enable` + `WantedBy=multi-user.target` (Item 060) y auto-recuperación real re-verificada con la demo gated: ciclo ÉXITO por catcher SMTP, `kill -9` → systemd reinicia solo (MainPID nuevo) → segundo ciclo, `ODIN_SERVICE_DEMO=1 uv run pytest tests/test_service_linux_integration.py::test_user_service_restarts_after_kill_and_delivers_cycles -q` → **1 passed in 102.27 s**; el reinicio del SO queda como procedimiento manual (runbook §8)
 - [x] Scheduler dispara según horario sin intervención externa en ambas plataformas — el parser/trigger cron está cubierto por los Items 049-051 y 057 (demo con cron real `* * * * *`: 2 ciclos en 78.6 s) y el modo residente lo ejecuta el mismo `ServiceRunner` compartido (Item 065): en la demo gated de systemd los dos ciclos los disparó el servicio sin intervención; `uv run pytest tests/test_service_runner.py tests/test_scheduler.py -q` → 54 passed (incluye reloj falso y solapamiento)
 - [x] `odin service status` refleja estado real en ambas plataformas — `render_platform_status` compone el estado del gestor (`systemctl show` en Linux, `QueryServiceStatus`/`QueryServiceConfig` en Windows vía dobles) con `render_service_status` (pid vivo/obsoleto, jobs, próximo disparo, salud, errores); 7 tests en `tests/test_service_status.py` y 6 en `tests/test_cli.py` cubren las combinaciones (no instalado, detenido, corriendo, estado obsoleto, sin estado, gestor caído → exit 0 con advertencia); `uv run pytest tests/test_service_status.py tests/test_cli.py -q` → 99 passed
@@ -180,7 +180,8 @@ Estado: ✅
 residente con scheduler propio sin cron ni Task Scheduler, recuperación
 automática ante caída (demo systemd re-verificada) y solapamiento controlado
 (Items 051/054)—, con el reinicio del SO en Windows Server real delegado al
-runbook de `docs/service.md` §8 en la Etapa 8 (Item 009). No se ajusta una
+runbook de `docs/service.md` §8 en la Etapa 8 (Items 073/074, salvedad de la
+corrida real en §9). No se ajusta una
 tabla C en `progress.md` (no existe para las etapas previas): la verificación
 completa de los criterios 1–8 de la visión es el cierre de la Etapa 8.
 
@@ -192,15 +193,15 @@ Estado: 🚧
 
 ### Entregables
 - ✅ Matriz de pruebas Firebird (mínimo 2.5 y 5/6) con `gbak` de la familia correspondiente; guía `gbak_path` por versión (Items 069-070 ✅: `tests/firebird_container.py` —helper compartido de contenedores por familia, `gbak` de la propia imagen vía wrapper `docker exec --user root` con el `work_dir` montado en la misma ruta absoluta, sin `gbak` en el host— + `tests/test_firebird_matrix.py` parametrizado 2.5/3.0/4.0/5.0/6.0-snapshot `@integration` skip-safe que siembra con `isql`, respalda con `BackupExecutor`+`gbak_path`, valida el `.fbk` y restaura a scratch contando filas y charset; `test_backup_integration.py`/`test_notify_integration.py` adaptados al helper; matriz ejecutada con evidencia —2.5.9 LI-V2.5.9.27139 UTF8 2560 B, 3.0.9 LI-V3.0.9.33560 WIN1252, 4.0.5 LI-V4.0.5.3140 ISO8859_1, 5.0.4 LI-V5.0.4.1812 UTF8, 6.0-snapshot LI-T6.0.0.2177 UTF8, 3/3 filas restauradas en todas: `uv run pytest tests/test_firebird_matrix.py -q -m integration -s` → **5 passed in 23.31 s**—; `docs/firebird.md` con la matriz de compatibilidad, la regla de familia con las incompatibilidades verificadas (3+ ↔ 2.5 y formato de backup 1..9 vs 11), la guía de `gbak_path` (auto-detección, override, convivencia de instalaciones y ejemplos Linux/Windows), conexión/charset, reproducción local con `ODIN_FIREBIRD_*` y recomendación por despliegue; hueco real corregido: `/usr/local/firebird` (prefijo del tarball de 2.5) sumado a `gbak_finder` con test; README enlaza la guía; gates del batch: **631 passed + 3 skipped** + ruff + mypy Success 19 files)
-- ✅ Verificación de `uv tool install` en Windows Server y Linux LTS limpios; prueba de `odin run` y del servicio — **Linux LTS ✅ (Items 071-072)**: `scripts/verify.py` como gate local (cierre del Item 009 en Linux) y empaquetado real verificado —`ODIN_BUILD_ARTIFACTS=1 uv run pytest tests/test_packaging.py -q` → 4 passed (wheel/sdist + `uv tool install` aislado + `odin 0.1.0`/`validate`/`service status`), capa `ubuntu:24.04` limpia (1 passed + 1 skipped) y e2e gated `ODIN_CLEAN_CONTAINER_E2E=1` → 2 passed con `odin run`, Firebird 5.0 de la matriz, SFTP/SMTP ephemeral, `.fbk`/`.fbk.7z` y correo `[ODIN] ÉXITO`; finding real: `tzdata` como dependencia directa—; **Windows Server queda para el Item 074** (job Windows de la CI del Item 073 y/o runbook §8)
+- ✅ Verificación de `uv tool install` en Windows Server y Linux LTS limpios; prueba de `odin run` y del servicio — **Linux LTS ✅ (Items 071-072)**: `scripts/verify.py` como gate local (cierre del Item 009 en Linux) y empaquetado real verificado —`ODIN_BUILD_ARTIFACTS=1 uv run pytest tests/test_packaging.py -q` → 4 passed (wheel/sdist + `uv tool install` aislado + `odin 0.1.0`/`validate`/`service status`), capa `ubuntu:24.04` limpia (1 passed + 1 skipped) y e2e gated `ODIN_CLEAN_CONTAINER_E2E=1` → 2 passed con `odin run`, Firebird 5.0 de la matriz, SFTP/SMTP ephemeral, `.fbk`/`.fbk.7z` y correo `[ODIN] ÉXITO`; finding real: `tzdata` como dependencia directa—; **Windows Server (Item 074): vía preparada y delegada** — job `windows` de la CI (`.github/workflows/ci.yml`, gate + smoke gated del SCM) y runbook §8; la ejecución real queda pendiente al publicar el repositorio, con la evidencia a completar en `docs/service.md` §9
 - 🚧 `README.md` completo: instalación, configuración (ejemplos por plataforma), operación, troubleshooting
 - 🚧 Guía de seguridad: permisos del JSON (600/ACL), recomendación de clave SSH, advertencia de credenciales legibles
-- ✅ Suite de tests completa verde en Linux y Windows (CI o script de verificación) — Item 071 ✅: gate único `scripts/verify.py` (solo stdlib, Linux/Windows) con `--skip-sync`/`--quick`/`--only`, `tests/test_verify_script.py` (13 tests con runner inyectado, sin `uv` real) y quickstart por plataforma en el README; evidencia `uv run python scripts/verify.py` → EXIT=0 (pytest 48.84 s); el job Windows real llega con la CI del Item 073
+- ✅ Suite de tests completa verde en Linux y Windows (CI o script de verificación) — Item 071 ✅: gate único `scripts/verify.py` (solo stdlib, Linux/Windows) con `--skip-sync`/`--quick`/`--only`, `tests/test_verify_script.py` (13 tests con runner inyectado, sin `uv` real) y quickstart por plataforma en el README; evidencia `uv run python scripts/verify.py` → EXIT=0 (pytest 48.84 s); **Item 073 ✅**: `.github/workflows/ci.yml` con jobs `linux`/`windows` (checkout, `astral-sh/setup-uv` con caché, `uv sync --locked`, el gate, `uv build` y wheel como artefacto) + sección "Integración continua" del README; el job `windows` suma el ciclo real del SCM gated `ODIN_WINDOWS_SERVICE_SMOKE=1` (`tests/test_service_windows_integration.py`) y `tests/test_ci_workflow.py` (6 tests) mantiene el YAML como contrato; workflow **listo para habilitar al publicar** (hoy sin remoto, primera corrida real en el Item 074)
 - 🚧 Release/tag `1.0.0`
 
 ### Criterios de aceptación
 - [ ] Criterios de éxito 1–8 de la visión verificados con evidencia (logs/correos/salidas)
-- [ ] Instalación desde cero en ambas plataformas sin pasos fuera de la documentación — **Linux LTS ✅ (Item 072)**: host aislado y contenedor `ubuntu:24.04` limpio con el wheel, `odin --version`/`validate`/`service status` y e2e de `odin run`; falta Windows Server (Item 074/CI 073)
+- [ ] Instalación desde cero en ambas plataformas sin pasos fuera de la documentación — **Linux LTS ✅ (Item 072)**: host aislado y contenedor `ubuntu:24.04` limpio con el wheel, `odin --version`/`validate`/`service status` y e2e de `odin run`; **Windows Server (Items 073/074)**: vía CI/runbook preparada y documentada, con la salvedad de la ejecución real pendiente al publicar (`docs/service.md` §9)
 - [ ] Respaldo demostrado sobre Firebird 2.5 y sobre Firebird 5 o 6
 - [ ] Documentación consistente con el comportamiento real
 
@@ -256,18 +257,19 @@ Estado: 🚧
 
 ## Próximo Paso
 
-El **Lote B** de `queue-008.md` (items 071-072) quedó cerrado: `scripts/verify.py`
-es el gate único multiplataforma (solo stdlib, `--skip-sync`/`--quick`/`--only`,
-13 tests con runner inyectado y quickstart por plataforma en el README; cierra
-el pendiente del Item 009 en Linux) y el empaquetado quedó verificado de punta
-a punta en Linux — `uv build` (wheel/sdist), `uv tool install` aislado en host,
-contenedor `ubuntu:24.04` limpio y e2e gated `ODIN_CLEAN_CONTAINER_E2E=1` con
-Firebird 5.0 de la matriz, SFTP/SMTP ephemeral y `odin run` completo—; el
-contenedor limpio destapó un hueco real (`zoneinfo` sin datos IANA) que quedó
-corregido con `tzdata` como dependencia directa. La suite está en **646 passed
-+ 7 skipped in 74.35 s** + ruff + mypy Success 19 files.
+El **Lote C** de `queue-008.md` (items 073-074) quedó cerrado: la CI
+multiplataforma está **lista para habilitar** al publicar el repositorio —jobs
+`linux`/`windows` con el gate único del Item 071, `uv build` con el wheel como
+artefacto y el ciclo real del SCM gated `ODIN_WINDOWS_SERVICE_SMOKE=1`
+(escenario skip-safe de `tests/test_service_windows_integration.py`, con `gbak`
+*stub*, SMTP catcher y estado del SCM)—, el YAML queda como contrato en
+`tests/test_ci_workflow.py` (6 tests) y el README documenta la integración; la
+verificación en limpio en Windows Server quedó registrada como **delegada**
+(job `windows` de la CI o runbook §8) en `docs/service.md` §9, lo que permitió
+cerrar el **Item 009** con la salvedad y marcar la **Etapa 1 ✅**. La suite está
+en **652 passed + 8 skipped in 95.10 s** + ruff + mypy Success 19 files.
 
-Sigue la **Etapa 8** con el **Lote C** de `queue-008.md` (items 073-074: CI
-multiplataforma lista para habilitar con el job Windows real y verificación en
-limpio en Windows Server que cierra el Item 009). Siguiente: en una **nueva
-sesión de chat** ejecutar `/speckit.aide.execute-batch 073,074`.
+Sigue la **Etapa 8** con el **Lote D** de `queue-008.md` (items 075-076: README
+final con instalación, operación y troubleshooting, y la guía de seguridad
+`docs/security.md`). Siguiente: en una **nueva sesión de chat** ejecutar
+`/speckit.aide.execute-batch 075,076`.
