@@ -5,15 +5,69 @@ compresión 7z, transferencia SFTP (paramiko) y notificación por correo.
 
 > Proyecto en desarrollo bajo el flujo AIDE (`docs/aide/`).
 
+## Índice
+
+- [Requisitos](#requisitos)
+- [Instalación](#instalación)
+  - [Instalación con `uv tool install`](#instalación-con-uv-tool-install)
+  - [Modo desarrollo](#modo-desarrollo)
+- [Configuración](#configuración)
+  - [Bloques del JSON](#bloques-del-json)
+  - [Tabla resumen de campos y defaults](#tabla-resumen-de-campos-y-defaults)
+  - [Ejemplos](#ejemplos)
+  - [Validación de configuración](#validación-de-configuración)
+- [Operación](#operación)
+  - [Ejecución de respaldos (`odin run`)](#ejecución-de-respaldos-odin-run)
+  - [Notificación por correo](#notificación-por-correo)
+  - [Retención local](#retención-local)
+  - [Scheduler interno y modo servicio en primer plano](#scheduler-interno-y-modo-servicio-en-primer-plano)
+  - [Modo servicio residente (Windows Service / daemon Linux)](#modo-servicio-residente-windows-service--daemon-linux)
+  - [Logging](#logging)
+  - [Exit codes](#exit-codes)
+- [Troubleshooting](#troubleshooting)
+- [Seguridad](#seguridad)
+- [Integración continua](#integración-continua)
+- [Compatibilidad de dependencias (Python 3.14)](#compatibilidad-de-dependencias-python-314)
+- [Licencia](#licencia)
+
 ## Requisitos
 
-- Python ≥ 3.14 (gestionado con [uv](https://docs.astral.sh/uv/))
-- uv
-- `gbak` de la **misma versión mayor** que cada base Firebird (cliente o
-  servidor instalado); la [guía de compatibilidad Firebird](docs/firebird.md)
-  cubre la matriz 2.5 → 6 y la resolución de `gbak_path` por plataforma
+| Requisito | Detalle |
+|---|---|
+| Sistema operativo | Windows Server 2016+ o Linux LTS. Misma base de código; la CI corre en `ubuntu-latest` y `windows-latest`. |
+| Python | ≥ 3.14 (`requires-python = ">=3.14"`), gestionado con [uv](https://docs.astral.sh/uv/). `tzdata` viaja como dependencia para `scheduler.timezone` donde el SO no trae la base IANA (Windows y contenedores mínimos). |
+| Firebird | Servidor accesible y `gbak` de la **misma versión mayor** que cada base (cliente o servidor instalado). La [guía de compatibilidad Firebird](docs/firebird.md) cubre la matriz 2.5 → 6 y la resolución de `gbak_path` por plataforma. |
+| Conectividad | Firebird 3050/TCP (o el puerto configurado), SFTP 22/TCP (o el configurado) y el servidor SMTP. |
+| Permisos | Escritura en `local.work_dir` y en el directorio de logs. `root` (Linux) o consola elevada (Windows) solo para instalar el servicio del SO. |
 
-## Quickstart por plataforma
+## Instalación
+
+### Instalación con `uv tool install`
+
+Con `uv` instalado, ODIN se instala como **herramienta aislada** (sin el
+entorno de desarrollo ni el repositorio):
+
+```bash
+uv build                                # genera dist/odin-<versión>-py3-none-any.whl
+uv tool install dist/odin-*.whl         # instala el wheel
+odin --version                          # → odin 0.1.0
+```
+
+También se puede instalar directamente desde el repositorio (construye la
+fuente actual), o ejecutarlo sin instalarlo:
+
+```bash
+uv tool install .                       # instala la fuente del repo
+uvx --from . odin --version             # ejecución efímera, sin instalar
+```
+
+`uv tool install` deja el ejecutable en `~/.local/bin/odin` (Linux) o
+`%USERPROFILE%\.local\bin\odin.exe` (Windows). Si ese directorio no está en el
+`PATH`, agregalo con `uv tool update-shell` y volvé a abrir la terminal. Para
+actualizar o desinstalar: `uv tool upgrade odin` (instalaciones desde índice o
+repositorio) o reinstalar el wheel nuevo, y `uv tool uninstall odin`.
+
+### Modo desarrollo
 
 El **gate único** de desarrollo y CI es `scripts/verify.py`: corre `uv sync`,
 la suite de tests, `ruff`, `mypy` y `odin validate` sobre los dos ejemplos,
@@ -42,64 +96,104 @@ uv run python scripts\verify.py --skip-sync --only pytest
 `--help` documenta los flags (`--skip-sync`, `--quick`, `--only <id>`; ids:
 `sync`, `pytest`, `ruff`, `mypy`, `validate-linux`, `validate-windows`).
 
-## Integración continua
+El ciclo de desarrollo completo se verifica con ese gate; `uv run odin
+--version` está incluido en el quickstart.
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) corre el mismo gate en
-las dos plataformas objetivo, con jobs `linux` (`ubuntu-latest`) y `windows`
-(`windows-latest`):
+## Configuración
 
-1. checkout + `astral-sh/setup-uv` con caché;
-2. `uv sync --locked` y `uv run python scripts/verify.py` como gate único
-   (`pytest` + `ruff` + `mypy` + `odin validate` de los dos ejemplos);
-3. `uv build` y el wheel publicado como artefacto de la corrida.
+ODIN se configura con un único **JSON legible y OS-agnóstico**: las rutas
+aceptan `/` o `\`, `~` se expande al usuario que ejecuta y las rutas relativas
+se resuelven contra el directorio del propio JSON. La configuración contiene
+credenciales en texto legible: restringí sus permisos y no la versiones (ver
+[Seguridad](#seguridad) y [`docs/security.md`](docs/security.md)).
 
-El job `windows` suma el **ciclo de vida real del servicio** contra el SCM
-(los runners son administradores): `odin service install|start|status|stop|
-uninstall` con una configuración de scheduler y fases externas dobles
-(`gbak` *stub* y SMTP local, sin red externa), en el escenario gated
-`ODIN_WINDOWS_SERVICE_SMOKE=1` de
-`tests/test_service_windows_integration.py`. Fuera de Windows o sin la
-variable, ese test se salta: la suite local no lo necesita.
+### Bloques del JSON
 
-El workflow **se activa al publicar el repositorio** (`push`/`pull_request`;
-hoy el repositorio no tiene remoto y no se ha ejecutado todavía), usa
-`permissions: contents: read` y no consume secretos. Hasta entonces, el gate
-local equivalente es `scripts/verify.py`; la persona que publique el repo
-debería confirmar la primera corrida del job `windows` (evidencia pendiente en
-[`docs/service.md` §9](docs/service.md#9-evidencia-de-verificación-item-074)).
+Referencia rápida por bloque; los ejemplos completos están en
+[`examples/`](examples/) y cada campo se valida al cargar la configuración.
 
-## Compatibilidad de dependencias (Python 3.14)
+- **`databases[]`** — una entrada por base Firebird. `name` es la clave
+  estable que referencian los jobs del scheduler; `connection` se pasa a
+  `gbak` tal cual (`host/puerto:ruta` o alias). `gbak_path: null` delega la
+  resolución a la auto-detección por SO y versión
+  (ver [`docs/firebird.md`](docs/firebird.md)).
+- **`compression`** — nivel de 7z (`0` = *store*, `1–9` = LZMA2; default `7`)
+  y `password` opcional para cifrado AES-256 del `.fbk.7z`.
+- **`servers[]`** — destinos SFTP con reintentos, timeouts y política de host
+  keys. `auth.method` es `password` o `key` (`private_key` con `passphrase`
+  opcional, `~` permitido).
+- **`notification`** — casilla destino/remitente y transporte SMTP
+  (`starttls` por defecto; `smtp.ssl` para SSL implícito).
+- **`local`** — directorios de trabajo y logs, nivel de logging, umbral de
+  espacio libre y defaults operativos (timeouts y reintentos).
+- **`scheduler`** — jobs cron por subconjunto de bases;
 
-Se ha verificado la compatibilidad de las dependencias principales con Python 3.14. La resolución de paquetes mediante `uv` garantiza que los wheels adecuados para Windows y Linux se instalan correctamente.
+  ```json
+  "scheduler": {
+    "enabled": true,
+    "timezone": "America/Argentina/Buenos_Aires",
+    "jobs": [
+      {
+        "databases": ["erp_principal", "erp_sucursal"],
+        "schedule": "0 2 * * *",
+        "skip_if_running": true,
+        "on_misfire": "run_once"
+      }
+    ]
+  }
+  ```
 
-### Matriz de compatibilidad
+  La semántica de solapamiento y misfire está en
+  [Scheduler interno](#scheduler-interno-y-modo-servicio-en-primer-plano).
 
-| Dependencia | Versión Resuelta | `Requires-Python` | Evidencia de soporte 3.14 |
-|---|---|---|---|
-| `paramiko` | 5.0.0 | `>=3.9` | Linux: `import paramiko` OK. |
-| `py7zr` | 1.1.3 | `>=3.10` | Linux: `import py7zr` OK. |
-| `apscheduler` | 3.11.3 | `>=3.8` | Linux: `import apscheduler` OK. |
-| `pywin32` | 312 | `>=3.11` | Windows (estático): `uv.lock` contiene wheels `cp314` para `win32/amd64/arm64`. |
-| `tzdata` | 2026.3 | — (wheel universal `py2.py3`) | Datos IANA para `zoneinfo`; Item 072: sin datos del SO (contenedor Linux mínimo) `odin validate` fallaba, y Windows tampoco trae tzdata del SO. |
+### Tabla resumen de campos y defaults
 
-**Decisión de versionado:**
-- Se ha subido el floor de `pywin32` a `>=311` en `pyproject.toml` para reflejar el soporte real de wheels `cp314` en Python 3.14.
-- Se agregó `tzdata` como dependencia directa (Item 072): `zoneinfo` la necesita para `scheduler.timezone`/cron cuando el SO no trae la base IANA (contenedores Linux mínimos y Windows); con datos del SO actúa solo como fallback.
-- Se mantiene `requires-python >= 3.14`.
-- La confirmación runtime en Windows Server queda delegada al job `windows`
-  de la CI (Items 073/074; ver [`docs/service.md` §9](docs/service.md#9-evidencia-de-verificación-item-074)).
+| Bloque / campo | Default | Descripción |
+|---|---|---|
+| `databases[].name` | — (requerido) | Clave única de la base; la usan los jobs. |
+| `databases[].connection` | — (requerido) | Cadena de conexión que se pasa a `gbak`. |
+| `databases[].user` / `.password` | — (requeridos) | Credenciales Firebird; se enmascaran en logs e informes. |
+| `databases[].role` | `null` | Rol SQL opcional (`-role`). |
+| `databases[].charset` | `null` | Charset conservado en la configuración; `gbak` no admite switch de charset. |
+| `databases[].gbak_path` | `null` | Ruta explícita al `gbak`; `null` = auto-detección. |
+| `databases[].gbak_timeout_sec` | `null` → `local.gbak_timeout_sec` | Timeout del respaldo por base. |
+| `compression.level` | `7` | `0` = sin compresión (*store*); `1–9` = LZMA2. |
+| `compression.password` | `null` | Con valor, el `.fbk.7z` se cifra con AES-256. |
+| `servers[].name` | — (requerido) | Identificador del destino en el informe. |
+| `servers[].host` / `.port` | — (requeridos) | Servidor SFTP. |
+| `servers[].username` | — (requerido) | Usuario SFTP. |
+| `servers[].auth.method` | `password` | `password` o `key`. |
+| `servers[].auth.password` | `null` | Contraseña SFTP cuando `method: password`. |
+| `servers[].auth.private_key` / `.passphrase` | `null` | Clave privada (y passphrase) cuando `method: key`; `~` se expande. |
+| `servers[].remote_path` | — (requerido) | Directorio remoto destino; se crea si no existe. |
+| `servers[].host_key_policy` | `strict` | `strict`, `known_hosts`, `accept-new` o `insecure` (ver [Seguridad](#seguridad)). |
+| `servers[].sftp_retries` | `3` | Reintentos de conexión/operación. |
+| `servers[].sftp_connect_timeout_sec` | `30` | Timeout de conexión SSH. |
+| `servers[].sftp_operation_timeout_sec` | `60` | Timeout por operación SFTP. |
+| `servers[].sftp_retry_backoff_base` | `2.0` | Base del backoff exponencial entre reintentos (segundos). |
+| `servers[].sftp_retry_max_delay_sec` | `30.0` | Tope del backoff (segundos). |
+| `notification.to` / `.from` | — (requeridos) | Casilla de control y remitente del informe. |
+| `notification.log_tail_lines` | `50` | Últimas líneas del log (ya enmascaradas) que se anexan al cuerpo; `0` desactiva la cola. |
+| `notification.smtp.host` / `.port` | — (requeridos) | Servidor SMTP. |
+| `notification.smtp.starttls` | `true` | Negocia STARTTLS antes de autenticar; `false` envía en plano (relays locales). |
+| `notification.smtp.ssl` | `false` | SSL implícito (típicamente puerto 465); mutuamente excluyente con `starttls: true`. |
+| `notification.smtp.username` / `.password` | `""` | Autenticación SMTP; vacíos omiten el `AUTH`. |
+| `local.work_dir` | — (requerido) | Directorio de artefactos y estado; se autocrea. |
+| `local.retention_days` | — (requerido) | `0` deshabilita la limpieza; `N > 0` elimina copias gestionadas de más de `N` días. |
+| `local.log_level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` o `CRITICAL`. |
+| `local.log_dir` | `null` → `<work_dir>/logs` | Directorio del `odin.log`. |
+| `local.min_free_mb` | `1024` | Espacio libre mínimo exigido en `work_dir` por `validate`. |
+| `local.gbak_timeout_sec` | `7200` | Timeout por defecto del respaldo. |
+| `local.sftp_retries` | `3` | Reintentos SFTP por defecto (si el servidor no los define). |
+| `local.sftp_connect_timeout_sec` | `30` | Timeout de conexión SFTP por defecto (si el servidor no lo define). |
+| `scheduler.enabled` | `false` | Habilita el scheduler interno; `odin service run` exige `true`. |
+| `scheduler.timezone` | `"UTC"` | Zona IANA que interpreta los `schedule` y los `next_fire_time`. |
+| `scheduler.jobs[].databases` | — (requerido) | Bases del job (validadas contra `databases`). |
+| `scheduler.jobs[].schedule` | — (requerido) | Cron de 5 campos (minuto, hora, día del mes, mes, día de la semana). |
+| `scheduler.jobs[].skip_if_running` | `true` | `true`: omite el ciclo si alguna base está ocupada; `false`: corre solo con las libres. |
+| `scheduler.jobs[].on_misfire` | `run_once` | `run_once`: recupera el disparo vencido; `skip`: lo descarta. |
 
-*Nota: El test `tests/test_deps_compat.py` actúa como un invariante para prevenir regresiones en la compatibilidad.*
-
-El ciclo de desarrollo completo se verifica con el gate único
-[`scripts/verify.py`](#quickstart-por-plataforma); `uv run odin --version`
-está incluido en el quickstart.
-
-El modo servicio residente tiene su guía operativa completa en
-[`docs/service.md`](docs/service.md); la verificación de instalación desde
-cero (`uv tool install`) en ambas plataformas llegará con la Etapa 8.
-
-## Ejemplos de configuración
+### Ejemplos
 
 El directorio [`examples/`](examples/) trae configuraciones de ejemplo listas
 para copiar, una por plataforma:
@@ -119,7 +213,7 @@ El bloque `notification.smtp` define el transporte del informe: `starttls: true`
 `smtp.ssl: true` usa SSL implícito (típicamente puerto 465) y es mutuamente
 excluyente con `starttls: true`.
 
-## Validación de configuración
+### Validación de configuración
 
 ```bash
 uv run odin validate --config ruta/al/config.json    # o vía ODIN_CONFIG
@@ -147,7 +241,7 @@ cada uno con la ruta del campo implicado (p. ej. `config.servers[1].auth.private
 Los errores y el veredicto de invalidez van a stderr; el contexto y el veredicto
 de validez, a stdout.
 
-### Garantías
+#### Garantías
 
 - **Solo lectura:** `validate` no crea ni modifica archivos (el directorio de
   logs lo crea la configuración del logging, después de las verificaciones).
@@ -159,7 +253,30 @@ de validez, a stdout.
   sistema donde se ejecuta no es comprobable: se omite con una nota, nunca
   cuenta como error.
 
-## Ejecución de respaldos (`odin run`)
+## Operación
+
+Los comandos aceptan `--config <ruta>`; si se omite, usan la variable de
+entorno `ODIN_CONFIG`.
+
+| Comando | Qué hace |
+|---|---|
+| `odin validate --config <ruta>` | Valida el JSON sin escribir nada; `--strict` trata las advertencias como errores (exit 2). |
+| `odin run --config <ruta>` | Ciclo **one-shot** sobre todas las bases: respaldo, compresión, transferencia, correo y retención. |
+| `odin service run --config <ruta>` | Scheduler en primer plano hasta `SIGINT`/`SIGTERM`. |
+| `odin service status --config <ruta>` | Estado del gestor del SO y del scheduler. |
+| `odin service reload --config <ruta>` | Recarga en caliente de la configuración. |
+| `odin service install\|uninstall\|start\|stop [--config <ruta>]` | Ciclo de vida del servicio residente (systemd/SCM). |
+| `odin --version` | Versión instalada (hoy `odin 0.1.0`). |
+| `odin --help` / `odin <cmd> --help` | Ayuda y subcomandos. |
+
+```bash
+uv run odin validate --config examples/config.linux.json
+uv run odin run --config /etc/odin/config.json
+uv run odin service run --config /etc/odin/config.json
+uv run odin --version
+```
+
+### Ejecución de respaldos (`odin run`)
 
 ```bash
 uv run odin run --config ruta/al/config.json     # o vía ODIN_CONFIG
@@ -206,7 +323,7 @@ que falla no interrumpe a las siguientes.
    [Retención local](#retención-local)). Es una función secundaria: sus errores
    no alteran el exit code.
 
-## Notificación por correo
+### Notificación por correo
 
 Al terminar cada ejecución —éxito total, parcial o fallo, incluso si el lote no
 llegó a ejecutarse— ODIN envía el informe a `notification.to` desde
@@ -227,15 +344,6 @@ llegó a ejecutarse— ODIN envía el informe a `notification.to` desde
 }
 ```
 
-| Campo | Default | Descripción |
-|---|---|---|
-| `notification.to` / `notification.from` | — (requeridos) | Casilla de control y remitente del informe. |
-| `notification.log_tail_lines` | `50` | Últimas líneas del log (ya enmascaradas) que se anexan al cuerpo; `0` desactiva la cola. |
-| `notification.smtp.host` / `port` | — (requeridos) | Servidor SMTP. |
-| `notification.smtp.starttls` | `true` | Negocia STARTTLS antes de autenticar; `false` envía en plano (relays locales). |
-| `notification.smtp.ssl` | `false` | SSL implícito (típicamente puerto 465); mutuamente excluyente con `starttls: true`. |
-| `notification.smtp.username` / `password` | `""` | Autenticación SMTP; vacíos omiten el `AUTH`. |
-
 El timeout de conexión/operación SMTP es de 30 s (interno, no configurable).
 
 **Contenido del informe** (texto plano): estado global `ÉXITO`/`PARCIAL`/`FALLO`
@@ -253,7 +361,7 @@ claves privadas.
 resumen ("Correo NO enviado: ...") y devuelve exit code 1 cuando el resto de la
 corrida fue exitosa (ver [Exit codes](#exit-codes)).
 
-## Retención local
+### Retención local
 
 `local.retention_days` habilita la limpieza de las copias locales, que corre
 **después** del envío del correo:
@@ -280,7 +388,7 @@ corrida). Un borrado fallido se registra por archivo y no interrumpe el resto.
 La retención es una **función secundaria**: sus errores se reportan en el
 resumen y en el log, pero no alteran el exit code de la corrida.
 
-## Scheduler interno y modo servicio en primer plano
+### Scheduler interno y modo servicio en primer plano
 
 `odin service run` arranca el scheduler interno en primer plano: cada job del
 bloque `scheduler` del JSON dispara el pipeline completo (respaldo, compresión,
@@ -288,23 +396,6 @@ transferencia, correo y retención) sobre su subconjunto de bases y envía su
 propio informe por ciclo. `odin service status` consulta el estado persistido en
 `local.work_dir/scheduler_state.json` y `odin service reload` pide la recarga de
 la configuración sin reiniciar.
-
-### Bloque `scheduler` del JSON
-
-```json
-"scheduler": {
-  "enabled": true,
-  "timezone": "America/Argentina/Buenos_Aires",
-  "jobs": [
-    {
-      "databases": ["erp_principal", "erp_sucursal"],
-      "schedule": "0 2 * * *",
-      "skip_if_running": true,
-      "on_misfire": "run_once"
-    }
-  ]
-}
-```
 
 | Campo | Default | Descripción |
 |---|---|---|
@@ -320,7 +411,7 @@ la configuración sin reiniciar.
 `WARNING` si la expresión nunca dispara), además de advertir si una base queda
 fuera de todos los jobs.
 
-### Operación
+#### Operación
 
 ```bash
 uv run odin service run --config ruta/al/config.json     # scheduler en primer plano
@@ -343,7 +434,7 @@ uv run odin service reload --config ruta/al/config.json  # recarga en caliente
   se entrega, 1 si no hay servicio en ejecución y 2 si la configuración no
   puede cargarse.
 
-### Archivo de estado (`scheduler_state.json`)
+#### Archivo de estado (`scheduler_state.json`)
 
 El servicio persiste su estado en `local.work_dir/scheduler_state.json` con
 escritura atómica (temporal + reemplazo), de modo que `status` siempre lee un
@@ -361,7 +452,7 @@ solapamiento o misfire) y al detenerse. **Nunca contiene secretos**: los
 mensajes pasan por el enmascarador antes de persistirse. El archivo es
 consultable y de formato estable, pero no está pensado para editarse a mano.
 
-### Recarga en caliente
+#### Recarga en caliente
 
 `odin service reload` no reinicia el scheduler:
 
@@ -378,7 +469,7 @@ servicio, refrescando además el logging y la máscara de secretos. Si la
 configuración es inválida, conserva la vigente y registra el motivo en el log y
 en `recent_errors`. Consumir el archivo de control es idempotente.
 
-### Solapamiento y misfire
+#### Solapamiento y misfire
 
 - **Solapamiento**: el servicio mantiene en proceso el registro de las bases en
   ejecución. Con `skip_if_running: true` un ciclo se omite si alguna de sus
@@ -389,7 +480,7 @@ en `recent_errors`. Consumir el archivo de control es idempotente.
   `on_misfire: run_once` la corrida recuperada se ejecuta aunque llegue tarde;
   con `skip` se descarta (tolerancia de 1 s) y queda registrada como omisión.
 
-### Relación con `odin run` (one-shot)
+#### Relación con `odin run` (one-shot)
 
 `odin run` ejecuta el pipeline **una vez** sobre todas las bases y termina (ver
 [Ejecución de respaldos](#ejecución-de-respaldos-odin-run)); `odin service run`
@@ -398,7 +489,7 @@ del job y con su propio correo y retención por ciclo, más el estado persistido
 para operar sin intervención. Las dos vías comparten fases, enmascarado de
 secretos y contrato de resultados por base.
 
-### Demo manual con cadencia real de 1–2 minutos
+#### Demo manual con cadencia real de 1–2 minutos
 
 1. Configure un job que dispare cada minuto, manteniendo `scheduler.enabled:
    true` (el resto del JSON es el habitual):
@@ -450,7 +541,7 @@ Por defecto se salta para no sumar ~2 minutos a la suite; los casos que sí
 corren por defecto (ciclos acortados en primer plano y parada limpia con
 SIGTERM) tardan segundos.
 
-## Modo servicio residente (Windows Service / daemon Linux)
+### Modo servicio residente (Windows Service / daemon Linux)
 
 `odin service install` empaqueta el scheduler interno como **servicio del SO**:
 Windows Service (SCM) en Windows Server y unit **systemd** en Linux LTS. Es la
@@ -486,7 +577,21 @@ diagnóstico de fallos comunes, desinstalación limpia y el runbook de
 verificación en Windows Server real— está en
 [`docs/service.md`](docs/service.md).
 
-## Exit codes
+### Logging
+
+ODIN escribe consola y archivo en las ejecuciones one-shot (`validate`, `run`);
+el modo residente (`odin service run` y el servicio del SO) escribe **solo
+archivo**, para no depender de una terminal.
+
+| Aspecto | Detalle |
+|---|---|
+| Archivo | `<resolved_log_dir>/odin.log` = `local.log_dir` o, si es `null`, `<work_dir>/logs/odin.log`. |
+| Rotación | 5 MiB por archivo con 5 backups (`odin.log.1` … `odin.log.5`). |
+| Nivel | `local.log_level`: `DEBUG`, `INFO`, `WARNING`, `ERROR` o `CRITICAL` (default `INFO`). |
+| Enmascarado | Contraseñas, passphrases y contenido de claves privadas se sustituyen por `***` antes de escribir a consola, archivo, correo y estado. |
+| Cola del informe | `notification.log_tail_lines` (default `50`) anexa al correo las últimas líneas del log, ya enmascaradas; `0` la desactiva. |
+
+### Exit codes
 
 | Código | Significado |
 |---|---|
@@ -499,3 +604,98 @@ verificación en Windows Server real— está en
 Con `--strict` las advertencias también devuelven 2: útil como gate previo al
 despliegue o en CI.
 
+## Troubleshooting
+
+| Problema | Causa probable | Solución |
+|---|---|---|
+| `gbak` no encontrado o error de versión/formato al respaldar | La auto-detección no cubre la ruta instalada o el `gbak` es de una **familia distinta** a la base | Fijar `databases[].gbak_path` al binario de la misma versión mayor (`C:\Firebird_2_5\bin\gbak.exe`, `/opt/firebird/bin/gbak`, …); ver [`docs/firebird.md`](docs/firebird.md) |
+| Login Firebird rechazado (`Your user name and password are not defined…`) | Usuario/clave incorrectos; en Firebird 2.5 la contraseña solo distingue los primeros **8 bytes** | Verificar las credenciales de `databases[]`; en 2.5 usar una clave de ≤ 8 bytes significativos y recrearla como SYSDBA |
+| `odin validate` advierte permisos `644`/`666` del JSON | El archivo con credenciales es legible por grupo/otros | `chmod 600 config.json` y dueño correcto (Linux) o `icacls` restrictivo (Windows); ver [`docs/security.md`](docs/security.md) |
+| El correo no llega o el resumen dice `Correo NO enviado` | SMTP bloqueado por firewall, host/puerto incorrectos o `starttls` no soportado por el relay | Probar conectividad al puerto SMTP, ajustar `notification.smtp.host/port/starttls/ssl` y revisar `odin.log`; un SMTP caído devuelve exit 1 |
+| SFTP falla con `Host key … does not match` o `not found in known_hosts` | `host_key_policy: strict` y la clave del servidor es desconocida o cambió | Aprovisionar `known_hosts` para el destino o usar `accept-new` en el primer contacto; verificar el cambio de clave en el servidor |
+| `odin validate` marca el schedule de un job o una timezone inválida | Expresión cron mal formada (5 campos) o zona IANA inexistente | Corregir `scheduler.jobs[].schedule` o `scheduler.timezone`; `validate` muestra el próximo disparo de cada job |
+| `odin service install` no instala y devuelve la guía | Falta `root` (Linux) o la consola no está elevada (Windows) | Ejecutar como root/Administrador o completar la instalación con la guía impresa; ver [`docs/service.md`](docs/service.md) |
+| El servicio arranca y se detiene, o los ciclos fallan con `Permission denied` | La cuenta del servicio no lee el JSON, no escribe `work_dir`/logs o no ejecuta `gbak` | Ajustar dueño/permisos/ACL al usuario que corre el servicio; probar antes con `odin run --config …` con esa cuenta; ver [`docs/service.md`](docs/service.md) |
+| `odin service run` devuelve 2 al arrancar | `scheduler.enabled: false` o configuración inválida | Poner `scheduler.enabled: true`, definir al menos un job y correr `odin validate` |
+| La compresión falla con `No space left on device` | Disco lleno en `local.work_dir` | Liberar espacio o bajar `local.retention_days`; `validate` compara con `local.min_free_mb` |
+
+## Seguridad
+
+ODIN guarda las credenciales (Firebird, SFTP y SMTP) en el **JSON legible**
+deliberadamente, para que la configuración sea auditable y OS-agnóstica, y
+concentra las mitigaciones en el entorno:
+
+- **Permisos del JSON**: `600` (o ACL equivalente) solo para el dueño o la
+  cuenta del servicio; `odin validate` advierte si hay acceso de grupo/otros.
+- **SFTP con clave privada** en lugar de contraseña (passphrase obligatoria) y
+  política de host key `strict` por defecto.
+- **Enmascarado** de contraseñas, passphrases y contenido de claves en logs,
+  correo y `scheduler_state.json`.
+- **TLS/SSL en SMTP**: `starttls: true` por defecto o `smtp.ssl: true`; el
+  canal en plano queda advertido por `validate`.
+- **Mínimo privilegio** para la cuenta del servicio: lectura del JSON,
+  escritura solo en `work_dir`/logs, ejecución de `gbak` y salida de red a
+  Firebird/SFTP/SMTP.
+
+La guía completa —modelo de amenazas, permisos por plataforma (`chmod`/
+`icacls`), claves SSH, políticas de host key, límites del enmascarado, rotación
+de credenciales y checklist de despliegue— está en
+[`docs/security.md`](docs/security.md).
+
+## Integración continua
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) corre el mismo gate en
+las dos plataformas objetivo, con jobs `linux` (`ubuntu-latest`) y `windows`
+(`windows-latest`):
+
+1. checkout + `astral-sh/setup-uv` con caché;
+2. `uv sync --locked` y `uv run python scripts/verify.py` como gate único
+   (`pytest` + `ruff` + `mypy` + `odin validate` de los dos ejemplos);
+3. `uv build` y el wheel publicado como artefacto de la corrida.
+
+El job `windows` suma el **ciclo de vida real del servicio** contra el SCM
+(los runners son administradores): `odin service install|start|status|stop|
+uninstall` con una configuración de scheduler y fases externas dobles
+(`gbak` *stub* y SMTP local, sin red externa), en el escenario gated
+`ODIN_WINDOWS_SERVICE_SMOKE=1` de
+`tests/test_service_windows_integration.py`. Fuera de Windows o sin la
+variable, ese test se salta: la suite local no lo necesita.
+
+El workflow **se activa al publicar el repositorio** (`push`/`pull_request`;
+hoy el repositorio no tiene remoto y no se ha ejecutado todavía), usa
+`permissions: contents: read` y no consume secretos. Hasta entonces, el gate
+local equivalente es `scripts/verify.py`; la persona que publique el repo
+debería confirmar la primera corrida del job `windows` (evidencia pendiente en
+[`docs/service.md` §9](docs/service.md#9-evidencia-de-verificación-item-074)).
+
+## Compatibilidad de dependencias (Python 3.14)
+
+Se ha verificado la compatibilidad de las dependencias principales con Python 3.14. La resolución de paquetes mediante `uv` garantiza que los wheels adecuados para Windows y Linux se instalan correctamente.
+
+### Matriz de compatibilidad
+
+| Dependencia | Versión Resuelta | `Requires-Python` | Evidencia de soporte 3.14 |
+|---|---|---|---|
+| `paramiko` | 5.0.0 | `>=3.9` | Linux: `import paramiko` OK. |
+| `py7zr` | 1.1.3 | `>=3.10` | Linux: `import py7zr` OK. |
+| `apscheduler` | 3.11.3 | `>=3.8` | Linux: `import apscheduler` OK. |
+| `pywin32` | 312 | `>=3.11` | Windows (estático): `uv.lock` contiene wheels `cp314` para `win32/amd64/arm64`. |
+| `tzdata` | 2026.3 | — (wheel universal `py2.py3`) | Datos IANA para `zoneinfo`; Item 072: sin datos del SO (contenedor Linux mínimo) `odin validate` fallaba, y Windows tampoco trae tzdata del SO. |
+
+**Decisión de versionado:**
+- Se ha subido el floor de `pywin32` a `>=311` en `pyproject.toml` para reflejar el soporte real de wheels `cp314` en Python 3.14.
+- Se agregó `tzdata` como dependencia directa (Item 072): `zoneinfo` la necesita para `scheduler.timezone`/cron cuando el SO no trae la base IANA (contenedores Linux mínimos y Windows); con datos del SO actúa solo como fallback.
+- Se mantiene `requires-python >= 3.14`.
+- La confirmación runtime en Windows Server queda delegada al job `windows`
+  de la CI (Items 073/074; ver [`docs/service.md` §9](docs/service.md#9-evidencia-de-verificación-item-074)).
+
+*Nota: El test `tests/test_deps_compat.py` actúa como un invariante para prevenir regresiones en la compatibilidad.*
+
+El ciclo de desarrollo completo se verifica con el gate único
+[`scripts/verify.py`](#modo-desarrollo); `uv run odin --version`
+está incluido en el quickstart.
+
+## Licencia
+
+MIT. La declaración de licencia está en [`pyproject.toml`](pyproject.toml)
+(`license = "MIT"`).
