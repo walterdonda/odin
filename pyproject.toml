@@ -4,14 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "odin"
-version = "0.1.0"
+version = "1.0.0"
 description = "Respaldo externo de bases de datos Firebird (2.5-6): backup con gbak, compresion 7z, transferencia SFTP con paramiko y notificacion por correo."
 readme = "README.md"
 requires-python = ">=3.14"
 license = "MIT"
 keywords = ["firebird", "backup", "gbak", "sftp", "paramiko", "7z"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: System Administrators",
     "Operating System :: Microsoft :: Windows",

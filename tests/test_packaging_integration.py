@@ -26,6 +26,7 @@ from pathlib import Path
 
 import pytest
 
+import odin
 from tests.firebird_container import (
     DOCKER,
     MATRIX_IMAGES,
@@ -168,7 +169,7 @@ def test_clean_linux_container_installs_and_runs_the_cli(tmp_path: Path) -> None
         mounts=[(ROOT / "examples", "/examples")],
     )
     assert completed.returncode == 0, _detail(completed)
-    assert "odin 0.1.0" in completed.stdout
+    assert f"odin {odin.__version__}" in completed.stdout
     assert "Configuración válida" in completed.stdout
     assert "Servicio del SO" in completed.stdout
     assert "CLEAN-OK" in completed.stdout
@@ -231,7 +232,7 @@ def test_clean_linux_container_odin_run_end_to_end(tmp_path: Path) -> None:
             docker_socket=True,
         )
         assert completed.returncode == 0, _detail(completed)
-        assert "odin 0.1.0" in completed.stdout
+        assert f"odin {odin.__version__}" in completed.stdout
         assert "E2E-OK" in completed.stdout
 
         backups = sorted(work_dir.glob("*.fbk"))

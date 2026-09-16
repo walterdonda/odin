@@ -1,5 +1,7 @@
 """Tests de humo del esqueleto del paquete (Item 001)."""
 
+from importlib.metadata import version
+
 import pytest
 
 import odin
@@ -7,14 +9,14 @@ from odin.cli import main
 
 
 def test_package_import_and_version() -> None:
-    assert odin.__version__ == "0.1.0"
+    assert odin.__version__ == version("odin")
 
 
 def test_cli_version(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as excinfo:
         main(["--version"])
     assert excinfo.value.code == 0
-    assert "odin 0.1.0" in capsys.readouterr().out
+    assert f"odin {odin.__version__}" in capsys.readouterr().out
 
 
 def test_cli_no_args_prints_help(capsys: pytest.CaptureFixture[str]) -> None:

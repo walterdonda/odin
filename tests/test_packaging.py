@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from odin import __version__ as ODIN_VERSION
 from tests.packaging_tools import (
     ROOT,
     Artifacts,
@@ -34,7 +35,7 @@ BUILD_ENABLED = os.environ.get("ODIN_BUILD_ARTIFACTS") == "1"
 
 def test_project_metadata_declares_python_and_entry_point() -> None:
     assert PROJECT["name"] == "odin"
-    assert PROJECT["version"] == "0.1.0"
+    assert PROJECT["version"] == ODIN_VERSION
     assert PROJECT["requires-python"] == ">=3.14"
     assert PROJECT["scripts"]["odin"] == "odin.cli:main"
 
@@ -99,7 +100,7 @@ def test_clean_uv_tool_install_runs_the_cli(artifacts: Artifacts, tmp_path: Path
         [str(odin), "--version"], env=env, capture_output=True, text=True, timeout=120
     )
     assert version.returncode == 0
-    assert version.stdout.strip() == "odin 0.1.0"
+    assert version.stdout.strip() == f"odin {ODIN_VERSION}"
 
     for example in ("config.linux.json", "config.windows.json"):
         validated = subprocess.run(
