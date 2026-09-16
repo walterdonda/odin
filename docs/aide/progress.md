@@ -4,7 +4,7 @@
 
 **Leyenda:** 📋 Planificado · 🚧 En progreso · ✅ Completo · ⏸️ Diferido · ❌ Excluido
 
-**Última actualización:** 2026-09-15 (Etapa 8 🚧 — Lote C 073-074 ✅: `.github/workflows/ci.yml` con jobs `linux`/`windows` (checkout, `astral-sh/setup-uv` con caché, `uv sync --locked`, el gate único `scripts/verify.py`, `uv build` y el wheel como artefacto) más el smoke gated del SCM `ODIN_WINDOWS_SERVICE_SMOKE=1` (`tests/test_service_windows_integration.py`), sección "Integración continua" del README y contrato del YAML en `tests/test_ci_workflow.py` (PyYAML dev, 6 tests); verificación en limpio en Windows Server **delegada** a la CI/runbook §8 con evidencia y salvedad en `docs/service.md` §9 → **Item 009 cerrado** y **Etapa 1 ✅**; gates **652 passed + 8 skipped in 68.48 s** + ruff + mypy Success 19 files)
+**Última actualización:** 2026-09-15 (Etapa 8 🚧 — Lote D 075-076 ✅: `README.md` reestructurado como entrada única —índice con anclas verificadas, requisitos, instalación con `uv tool install` desde wheel/repo y `uvx` más modo desarrollo con `scripts/verify.py`, configuración bloque por bloque con tabla resumen de campos y defaults tomada de `config.py`, operación y exit codes vigentes, logging, troubleshooting de 10 filas, seguridad, CI y licencia MIT— y `docs/security.md` con modelo de amenazas, permisos `chmod`/`icacls`, clave SFTP RSA con passphrase, políticas de host key, garantías y límites del enmascarado, TLS/SSL en SMTP, mínimo privilegio, checklist y rotación; enlazada desde README y `docs/service.md`, y los mensajes de permisos de `validate` apuntan a la guía con tests que lo afirman; gates **652 passed + 8 skipped in 71.12 s** + ruff + mypy Success 19 files)
 ---
 
 ## Resumen por Etapa
@@ -194,8 +194,8 @@ Estado: 🚧
 ### Entregables
 - ✅ Matriz de pruebas Firebird (mínimo 2.5 y 5/6) con `gbak` de la familia correspondiente; guía `gbak_path` por versión (Items 069-070 ✅: `tests/firebird_container.py` —helper compartido de contenedores por familia, `gbak` de la propia imagen vía wrapper `docker exec --user root` con el `work_dir` montado en la misma ruta absoluta, sin `gbak` en el host— + `tests/test_firebird_matrix.py` parametrizado 2.5/3.0/4.0/5.0/6.0-snapshot `@integration` skip-safe que siembra con `isql`, respalda con `BackupExecutor`+`gbak_path`, valida el `.fbk` y restaura a scratch contando filas y charset; `test_backup_integration.py`/`test_notify_integration.py` adaptados al helper; matriz ejecutada con evidencia —2.5.9 LI-V2.5.9.27139 UTF8 2560 B, 3.0.9 LI-V3.0.9.33560 WIN1252, 4.0.5 LI-V4.0.5.3140 ISO8859_1, 5.0.4 LI-V5.0.4.1812 UTF8, 6.0-snapshot LI-T6.0.0.2177 UTF8, 3/3 filas restauradas en todas: `uv run pytest tests/test_firebird_matrix.py -q -m integration -s` → **5 passed in 23.31 s**—; `docs/firebird.md` con la matriz de compatibilidad, la regla de familia con las incompatibilidades verificadas (3+ ↔ 2.5 y formato de backup 1..9 vs 11), la guía de `gbak_path` (auto-detección, override, convivencia de instalaciones y ejemplos Linux/Windows), conexión/charset, reproducción local con `ODIN_FIREBIRD_*` y recomendación por despliegue; hueco real corregido: `/usr/local/firebird` (prefijo del tarball de 2.5) sumado a `gbak_finder` con test; README enlaza la guía; gates del batch: **631 passed + 3 skipped** + ruff + mypy Success 19 files)
 - ✅ Verificación de `uv tool install` en Windows Server y Linux LTS limpios; prueba de `odin run` y del servicio — **Linux LTS ✅ (Items 071-072)**: `scripts/verify.py` como gate local (cierre del Item 009 en Linux) y empaquetado real verificado —`ODIN_BUILD_ARTIFACTS=1 uv run pytest tests/test_packaging.py -q` → 4 passed (wheel/sdist + `uv tool install` aislado + `odin 0.1.0`/`validate`/`service status`), capa `ubuntu:24.04` limpia (1 passed + 1 skipped) y e2e gated `ODIN_CLEAN_CONTAINER_E2E=1` → 2 passed con `odin run`, Firebird 5.0 de la matriz, SFTP/SMTP ephemeral, `.fbk`/`.fbk.7z` y correo `[ODIN] ÉXITO`; finding real: `tzdata` como dependencia directa—; **Windows Server (Item 074): vía preparada y delegada** — job `windows` de la CI (`.github/workflows/ci.yml`, gate + smoke gated del SCM) y runbook §8; la ejecución real queda pendiente al publicar el repositorio, con la evidencia a completar en `docs/service.md` §9
-- 🚧 `README.md` completo: instalación, configuración (ejemplos por plataforma), operación, troubleshooting
-- 🚧 Guía de seguridad: permisos del JSON (600/ACL), recomendación de clave SSH, advertencia de credenciales legibles
+- ✅ `README.md` completo: instalación, configuración (ejemplos por plataforma), operación, troubleshooting (Item 075 ✅: reestructurado como entrada única —índice con anclas verificadas, requisitos por SO/Python/Firebird/conectividad, instalación con `uv tool install` desde wheel/repo y `uvx` más modo desarrollo con `scripts/verify.py`, configuración bloque por bloque con tabla resumen de campos y defaults tomada de `config.py`, operación con tabla de comandos y la tabla de exit codes vigente, logging con rotación/enmascarado/cola del informe, troubleshooting de 10 filas problema→causa→solución, seguridad enlazada a `docs/security.md`, CI y licencia MIT; enlaces y comandos contrastados contra el árbol y `--help`; gates 96 passed en smoke+cli + ruff + mypy Success 19 files)
+- ✅ Guía de seguridad: permisos del JSON (600/ACL), recomendación de clave SSH, advertencia de credenciales legibles (Item 076 ✅: `docs/security.md` con modelo de amenazas y la decisión explícita del JSON legible, permisos por plataforma (`chmod`/`chown`/`icacls` con `/inheritance:r`), clave SFTP RSA con passphrase frente a password (con el límite real: `paramiko.RSAKey` y rechazo de PPK), las cuatro políticas de host key con sus riesgos, garantías y límites del enmascarado (incluido el `-password` de `gbak` en la lista de procesos y su mitigación), TLS/SSL en SMTP con la limitación de verificación de certificado, mínimo privilegio de la cuenta y checklist + rotación; enlazada desde README y `docs/service.md`, y los tres mensajes de permisos de `validate` apuntan a la guía (`_SECURITY_GUIDE`) con tests que lo afirman; gates 652 passed + 8 skipped + ruff + mypy Success 19 files)
 - ✅ Suite de tests completa verde en Linux y Windows (CI o script de verificación) — Item 071 ✅: gate único `scripts/verify.py` (solo stdlib, Linux/Windows) con `--skip-sync`/`--quick`/`--only`, `tests/test_verify_script.py` (13 tests con runner inyectado, sin `uv` real) y quickstart por plataforma en el README; evidencia `uv run python scripts/verify.py` → EXIT=0 (pytest 48.84 s); **Item 073 ✅**: `.github/workflows/ci.yml` con jobs `linux`/`windows` (checkout, `astral-sh/setup-uv` con caché, `uv sync --locked`, el gate, `uv build` y wheel como artefacto) + sección "Integración continua" del README; el job `windows` suma el ciclo real del SCM gated `ODIN_WINDOWS_SERVICE_SMOKE=1` (`tests/test_service_windows_integration.py`) y `tests/test_ci_workflow.py` (6 tests) mantiene el YAML como contrato; workflow **listo para habilitar al publicar** (hoy sin remoto, primera corrida real en el Item 074)
 - 🚧 Release/tag `1.0.0`
 
@@ -257,19 +257,15 @@ Estado: 🚧
 
 ## Próximo Paso
 
-El **Lote C** de `queue-008.md` (items 073-074) quedó cerrado: la CI
-multiplataforma está **lista para habilitar** al publicar el repositorio —jobs
-`linux`/`windows` con el gate único del Item 071, `uv build` con el wheel como
-artefacto y el ciclo real del SCM gated `ODIN_WINDOWS_SERVICE_SMOKE=1`
-(escenario skip-safe de `tests/test_service_windows_integration.py`, con `gbak`
-*stub*, SMTP catcher y estado del SCM)—, el YAML queda como contrato en
-`tests/test_ci_workflow.py` (6 tests) y el README documenta la integración; la
-verificación en limpio en Windows Server quedó registrada como **delegada**
-(job `windows` de la CI o runbook §8) en `docs/service.md` §9, lo que permitió
-cerrar el **Item 009** con la salvedad y marcar la **Etapa 1 ✅**. La suite está
-en **652 passed + 8 skipped in 95.10 s** + ruff + mypy Success 19 files.
+El **Lote D** de `queue-008.md` (items 075-076) quedó cerrado: el README es la
+entrada única (índice, requisitos, instalación con `uv tool install`, tabla
+resumen de campos y defaults, operación, logging, troubleshooting, seguridad,
+CI y licencia) y `docs/security.md` documenta el modelo de amenazas, permisos,
+claves SSH/host keys, enmascarado y rotación; los mensajes de permisos de
+`validate` apuntan a la guía. La suite está en
+**652 passed + 8 skipped in 71.12 s** + ruff + mypy Success 19 files.
 
-Sigue la **Etapa 8** con el **Lote D** de `queue-008.md` (items 075-076: README
-final con instalación, operación y troubleshooting, y la guía de seguridad
-`docs/security.md`). Siguiente: en una **nueva sesión de chat** ejecutar
-`/speckit.aide.execute-batch 075,076`.
+Sigue la **Etapa 8** con el **Lote E** de `queue-008.md` (items 077-078: release
+`1.0.0` con versión/CHANGELOG/artefactos/tag y el cierre de la etapa con los
+criterios 1–8 de la visión verificados uno a uno). Siguiente: en una **nueva
+sesión de chat** ejecutar `/speckit.aide.execute-batch 077,078`.
