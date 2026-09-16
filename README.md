@@ -28,6 +28,7 @@ compresión 7z, transferencia SFTP (paramiko) y notificación por correo.
 - [Seguridad](#seguridad)
 - [Integración continua](#integración-continua)
 - [Compatibilidad de dependencias (Python 3.14)](#compatibilidad-de-dependencias-python-314)
+- [Changelog](CHANGELOG.md)
 - [Licencia](#licencia)
 
 ## Requisitos
@@ -50,7 +51,7 @@ entorno de desarrollo ni el repositorio):
 ```bash
 uv build                                # genera dist/odin-<versión>-py3-none-any.whl
 uv tool install dist/odin-*.whl         # instala el wheel
-odin --version                          # → odin 0.1.0
+odin --version                          # → odin 1.0.0
 ```
 
 También se puede instalar directamente desde el repositorio (construye la
@@ -266,7 +267,7 @@ entorno `ODIN_CONFIG`.
 | `odin service status --config <ruta>` | Estado del gestor del SO y del scheduler. |
 | `odin service reload --config <ruta>` | Recarga en caliente de la configuración. |
 | `odin service install\|uninstall\|start\|stop [--config <ruta>]` | Ciclo de vida del servicio residente (systemd/SCM). |
-| `odin --version` | Versión instalada (hoy `odin 0.1.0`). |
+| `odin --version` | Versión instalada (hoy `odin 1.0.0`). |
 | `odin --help` / `odin <cmd> --help` | Ayuda y subcomandos. |
 
 ```bash
@@ -698,4 +699,5 @@ está incluido en el quickstart.
 ## Licencia
 
 MIT. La declaración de licencia está en [`pyproject.toml`](pyproject.toml)
-(`license = "MIT"`).
+(`license = "MIT"`). El historial de cambios de cada versión está en
+[`CHANGELOG.md`](CHANGELOG.md).
