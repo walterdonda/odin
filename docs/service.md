@@ -14,7 +14,7 @@ Scheduler**.
   (`src/odin/service/runner.py`): sirve para probar y depurar.
 - `odin service reload` pide la recarga de la configuración sin reiniciar.
 - El estado consultable vive en `local.work_dir/scheduler_state.json` y el log
-  en `<resolved_log_dir>/odin.log` (ver [Logging](#logging)).
+  en `<resolved_log_dir>/odin.log` (ver [Logging](#6-logging)).
 
 ---
 
@@ -41,6 +41,10 @@ Scheduler**.
    - **ejecutar** `gbak` (o el binario indicado en `databases[].gbak_path`),
    - alcanzar por red el servidor Firebird (3050/TCP o el puerto configurado),
      los servidores SFTP (22/TCP) y el servidor SMTP.
+
+   El detalle de permisos, claves SSH, políticas de host key y mínimo
+   privilegio está en la guía de seguridad:
+   [`docs/security.md`](security.md).
 
 4. **Permisos de instalación.** En Linux hace falta `root` (o un usuario con
    permiso de escritura sobre `/etc/systemd/system`); en Windows, una consola
@@ -124,7 +128,8 @@ Group=odin
   /usr/sbin/nologin odin`) y dale lectura al JSON y escritura a `work_dir` y
   al directorio de logs. El JSON con secretos en texto legible debe quedar
   `chown odin` y permisos `600`; `odin validate` advierte si tiene acceso de
-  grupo/otros.
+  grupo/otros. Procedimiento completo y checklist:
+  [`docs/security.md`](security.md).
 
 ### 3.3 Arranque en boot y reinicio ante caída
 
@@ -208,7 +213,8 @@ password= ...`), esa cuenta necesita:
 
 La CLI no expone el flag de cuenta: `odin service install` instala con la
 cuenta por defecto. Para una cuenta dedicada, ajustá el servicio con las
-herramientas del SCM o usá `ServiceSpec.account` programáticamente.
+herramientas del SCM o usá `ServiceSpec.account` programáticamente. El mínimo
+privilegio y las ACL del JSON se detallan en [`docs/security.md`](security.md).
 
 ### 4.3 Actualización de la configuración y recarga
 
