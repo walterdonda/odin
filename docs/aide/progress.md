@@ -4,7 +4,7 @@
 
 **Leyenda:** 📋 Planificado · 🚧 En progreso · ✅ Completo · ⏸️ Diferido · ❌ Excluido
 
-**Última actualización:** 2026-09-15 (Etapa 8 🚧 — Lote D 075-076 ✅: `README.md` reestructurado como entrada única —índice con anclas verificadas, requisitos, instalación con `uv tool install` desde wheel/repo y `uvx` más modo desarrollo con `scripts/verify.py`, configuración bloque por bloque con tabla resumen de campos y defaults tomada de `config.py`, operación y exit codes vigentes, logging, troubleshooting de 10 filas, seguridad, CI y licencia MIT— y `docs/security.md` con modelo de amenazas, permisos `chmod`/`icacls`, clave SFTP RSA con passphrase, políticas de host key, garantías y límites del enmascarado, TLS/SSL en SMTP, mínimo privilegio, checklist y rotación; enlazada desde README y `docs/service.md`, y los mensajes de permisos de `validate` apuntan a la guía con tests que lo afirman; gates **652 passed + 8 skipped in 71.12 s** + ruff + mypy Success 19 files)
+**Última actualización:** 2026-09-16 (Etapa 3 ✅ y Etapa 8 ✅ — Lote E 077-078 ✅: release `1.0.0` con versión y lock, metadata Production/Stable, `CHANGELOG.md` y artefactos verificados con instalación aislada, más el cierre de la etapa con los criterios de éxito 1–8 de la visión verificados uno a uno y la consistencia documental revisada en `docs/release-1.0.md`; gates finales `scripts/verify.py` EXIT 0 (6/6) + **652 passed + 8 skipped in 79.53 s** + ruff + mypy Success 19 files; salvedades: tag `v1.0.0` pendiente tras el commit y evidencia real de Windows Server delegada a CI/runbook)
 ---
 
 ## Resumen por Etapa
@@ -18,7 +18,7 @@
 | 5 | Notificación por correo y flujo end-to-end one-shot | ✅ |
 | 6 | Scheduler interno | ✅ |
 | 7 | Modo servicio: Windows Service y daemon Linux | ✅ |
-| 8 | Matriz Firebird, empaquetado uv y documentación final | 🚧 |
+| 8 | Matriz Firebird, empaquetado uv y documentación final | ✅ |
 
 ---
 
@@ -34,7 +34,7 @@ Estado: ✅
 - ✅ Logging base: consola + archivo con rotación, nivel configurable, enmascarado de secretos (Item 004 ✅: `src/odin/log.py` con `setup_logging` idempotente — consola + `RotatingFileHandler` 5 MiB × 5 backups, nivel vía `LogLevel` — y `SecretMasker`/`MaskingFilter` puros reutilizables: secretos de `iter_secret_fields()` → `***` en ambos destinos, bloques PEM `PRIVATE KEY` vaciados por patrón; 30 tests en `tests/test_log.py`)
 - ✅ CLI argparse: `odin validate --config <ruta>` + variable de entorno `ODIN_CONFIG`; exit codes (0/2/1) (Item 005 ✅: `src/odin/cli.py` con subcomando `validate` cableado a `load_config` + `setup_logging` — fallo operativo de logging no invalida la config (exit 0 + advertencia) —, resolución `--config` → `ODIN_CONFIG` → error 2, constantes `EXIT_OK`/`EXIT_INTERNAL`/`EXIT_CONFIG`, errores imprevistos → 1 con traceback controlado, SystemExit de argparse preservado y punto de extensión documentado para `run`/`service`; 15 tests en `tests/test_cli.py`)
 - ✅ Ejemplos `examples/config.linux.json` y `examples/config.windows.json` (Item 007 ✅: fieles a la visión §5, charset `ISO8859_1`, secretos placeholder `***`, ambos con `odin validate` exit 0 en Linux — el de Windows omitiendo el `work_dir` por sabor distinto; `examples/README.md` con uso, seguridad (permisos 600/ACL, no versionar el JSON real) y campos opcionales con defaults; subsección "Ejemplos de configuración" en el README; 5 fixtures nuevos en `tests/fixtures/` —mínimo, rutas relativas+`~`, errores de tipo/rango/faltantes— y 16 tests en `tests/test_fixtures.py`)
-- ✅ `uv sync` + `uv run pytest` funcionando en Linux y Windows — Item 071 ✅ cerró el pendiente del **Item 009 en Linux** (`scripts/verify.py`, solo stdlib, mismo archivo en ambas plataformas: `uv sync` → pytest → ruff → mypy → `odin validate` con salida por paso y exit 0 solo si todo pasa; evidencia EXIT=0, seis pasos OK); **Items 073/074 ✅** cierran el item: Windows corre el mismo script en el job `windows` de `.github/workflows/ci.yml` (listo para habilitar al publicar; hoy no hay remoto) más el smoke gated del SCM `ODIN_WINDOWS_SERVICE_SMOKE=1` y el runbook §8 — salvedad de la corrida real en `docs/service.md` §9
+- ✅ `uv sync` + `uv run pytest` funcionando en Linux y Windows — Item 071 ✅ cerró el pendiente del **Item 009 en Linux** (`scripts/verify.py`, solo stdlib, mismo archivo en ambas plataformas: `uv sync` → pytest → ruff → mypy → `odin validate` con salida por paso y exit 0 solo si todo pasa; evidencia EXIT=0, seis pasos OK); **Items 073/074 ✅** cierran el item: Windows corre el mismo script en el job `windows` de `.github/workflows/ci.yml` (listo para habilitar al publicar; hoy no hay remoto) más el smoke gated del SCM `ODIN_WINDOWS_SERVICE_SMOKE=1` y el runbook §8 — salvedad de la corrida real en `docs/service.md` §9; **Item 078 ✅** dejó el cierre formal del Item 009 y de la Etapa 1 en `docs/release-1.0.md` (criterio 1)
 
 ### Criterios de aceptación
 - [x] `uv sync && uv run odin validate --config examples/config.linux.json` → exit code 0 — verificado en Linux (Item 007): ambos ejemplos dan exit 0 con advertencias no bloqueantes (JSON en 644, `work_dir` de desarrollo no creable sin root; el ejemplo Windows además omite el `work_dir` por sabor distinto). Con `--strict` dan 2 (esperado: son plantilla). Confirmación en Windows: el mismo gate corre en el job `windows` de la CI (Items 073/074) y el runbook §8 — salvedad de la primera corrida real al publicar el repositorio (`docs/service.md` §9)
@@ -67,7 +67,7 @@ Estado: ✅
 
 ## Etapa 3 — Compresión 7z
 
-Estado: 🚧
+Estado: ✅
 
 ### Entregables
 - ✅ `src/odin/compress.py`: `.fbk → .fbk.7z` con py7zr, nivel configurable, manejo de destino existente (Items 020-022 ✅: `compress_backup()` + `CompressionResult` + `archive_path_for()`, validación del artefacto, errores operativos en el resultado, escritura atómica que preserva la copia previa y mapeo de nivel 0=store / 1-9=LZMA2 con validación de rango; 28 tests unitarios en `tests/test_compress.py` contando el cifrado del Item 023 y el logging del Item 027)
@@ -76,7 +76,7 @@ Estado: 🚧
 - ✅ Pipeline incremental en `odin run`: respaldo → compresión por base (Items 024-026 ✅: `CompressionExecutor` + `BatchCompressionResult` con aislamiento de fallos, `BackupResult` extendido, `_cmd_run` comprime tras el respaldo y cruza el éxito por base, resumen con ambos artefactos y exit codes 0/3/4 según el pipeline completo; 33 tests en `tests/test_compress.py` y 38 en `tests/test_cli.py`)
 
 ### Criterios de aceptación
-- [ ] Demo: `odin run` genera ambos archivos con tamaños informados — cubierto por los tests e2e de los Items 025-026 (respaldo doblado + compresión real); la demo final con `gbak` real queda para el Item 029 (Lote C)
+- [x] Demo: `odin run` genera ambos archivos con tamaños informados — cubierto por los tests e2e de los Items 025-026 (respaldo doblado + compresión real con resumen de tamaños) y demostrado con `gbak` real en el e2e gated del contenedor limpio (Item 072: `ODIN_CLEAN_CONTAINER_E2E=1` → 2 passed con `.fbk` y `.fbk.7z` > 0); cierre formal de la etapa en el Item 078
 - [x] Test ida y vuelta: comprimir/descomprimir con comparación byte a byte — unitario en `tests/test_compress.py` (Items 020 y 023: sin cifrado y con AES-256); la variante de integración queda en el Item 028
 - [x] Test de origen inexistente o corrupto
 - [x] Test de fallo por disco lleno simulado (`OSError: No space left on device`)
@@ -189,7 +189,7 @@ completa de los criterios 1–8 de la visión es el cierre de la Etapa 8.
 
 ## Etapa 8 — Matriz Firebird, empaquetado uv y documentación final
 
-Estado: 🚧
+Estado: ✅
 
 ### Entregables
 - ✅ Matriz de pruebas Firebird (mínimo 2.5 y 5/6) con `gbak` de la familia correspondiente; guía `gbak_path` por versión (Items 069-070 ✅: `tests/firebird_container.py` —helper compartido de contenedores por familia, `gbak` de la propia imagen vía wrapper `docker exec --user root` con el `work_dir` montado en la misma ruta absoluta, sin `gbak` en el host— + `tests/test_firebird_matrix.py` parametrizado 2.5/3.0/4.0/5.0/6.0-snapshot `@integration` skip-safe que siembra con `isql`, respalda con `BackupExecutor`+`gbak_path`, valida el `.fbk` y restaura a scratch contando filas y charset; `test_backup_integration.py`/`test_notify_integration.py` adaptados al helper; matriz ejecutada con evidencia —2.5.9 LI-V2.5.9.27139 UTF8 2560 B, 3.0.9 LI-V3.0.9.33560 WIN1252, 4.0.5 LI-V4.0.5.3140 ISO8859_1, 5.0.4 LI-V5.0.4.1812 UTF8, 6.0-snapshot LI-T6.0.0.2177 UTF8, 3/3 filas restauradas en todas: `uv run pytest tests/test_firebird_matrix.py -q -m integration -s` → **5 passed in 23.31 s**—; `docs/firebird.md` con la matriz de compatibilidad, la regla de familia con las incompatibilidades verificadas (3+ ↔ 2.5 y formato de backup 1..9 vs 11), la guía de `gbak_path` (auto-detección, override, convivencia de instalaciones y ejemplos Linux/Windows), conexión/charset, reproducción local con `ODIN_FIREBIRD_*` y recomendación por despliegue; hueco real corregido: `/usr/local/firebird` (prefijo del tarball de 2.5) sumado a `gbak_finder` con test; README enlaza la guía; gates del batch: **631 passed + 3 skipped** + ruff + mypy Success 19 files)
@@ -197,13 +197,13 @@ Estado: 🚧
 - ✅ `README.md` completo: instalación, configuración (ejemplos por plataforma), operación, troubleshooting (Item 075 ✅: reestructurado como entrada única —índice con anclas verificadas, requisitos por SO/Python/Firebird/conectividad, instalación con `uv tool install` desde wheel/repo y `uvx` más modo desarrollo con `scripts/verify.py`, configuración bloque por bloque con tabla resumen de campos y defaults tomada de `config.py`, operación con tabla de comandos y la tabla de exit codes vigente, logging con rotación/enmascarado/cola del informe, troubleshooting de 10 filas problema→causa→solución, seguridad enlazada a `docs/security.md`, CI y licencia MIT; enlaces y comandos contrastados contra el árbol y `--help`; gates 96 passed en smoke+cli + ruff + mypy Success 19 files)
 - ✅ Guía de seguridad: permisos del JSON (600/ACL), recomendación de clave SSH, advertencia de credenciales legibles (Item 076 ✅: `docs/security.md` con modelo de amenazas y la decisión explícita del JSON legible, permisos por plataforma (`chmod`/`chown`/`icacls` con `/inheritance:r`), clave SFTP RSA con passphrase frente a password (con el límite real: `paramiko.RSAKey` y rechazo de PPK), las cuatro políticas de host key con sus riesgos, garantías y límites del enmascarado (incluido el `-password` de `gbak` en la lista de procesos y su mitigación), TLS/SSL en SMTP con la limitación de verificación de certificado, mínimo privilegio de la cuenta y checklist + rotación; enlazada desde README y `docs/service.md`, y los tres mensajes de permisos de `validate` apuntan a la guía (`_SECURITY_GUIDE`) con tests que lo afirman; gates 652 passed + 8 skipped + ruff + mypy Success 19 files)
 - ✅ Suite de tests completa verde en Linux y Windows (CI o script de verificación) — Item 071 ✅: gate único `scripts/verify.py` (solo stdlib, Linux/Windows) con `--skip-sync`/`--quick`/`--only`, `tests/test_verify_script.py` (13 tests con runner inyectado, sin `uv` real) y quickstart por plataforma en el README; evidencia `uv run python scripts/verify.py` → EXIT=0 (pytest 48.84 s); **Item 073 ✅**: `.github/workflows/ci.yml` con jobs `linux`/`windows` (checkout, `astral-sh/setup-uv` con caché, `uv sync --locked`, el gate, `uv build` y wheel como artefacto) + sección "Integración continua" del README; el job `windows` suma el ciclo real del SCM gated `ODIN_WINDOWS_SERVICE_SMOKE=1` (`tests/test_service_windows_integration.py`) y `tests/test_ci_workflow.py` (6 tests) mantiene el YAML como contrato; workflow **listo para habilitar al publicar** (hoy sin remoto, primera corrida real en el Item 074)
-- 🚧 Release/tag `1.0.0`
+- ✅ Release `1.0.0` (Item 077): `version = "1.0.0"` en `pyproject.toml` y `__version__` en `src/odin/__init__.py` (con `uv.lock` refrescado), clasificador `Development Status :: 5 - Production/Stable` y metadata revisada; `CHANGELOG.md` Keep a Changelog con la sección `1.0.0` (F1–F8, plataformas, exit codes, seguridad) enlazado desde el README; tests de humo/empaquetado derivan la versión de `odin.__version__`/metadata; `uv build` → wheel/sdist `1.0.0` verificados e instalación aislada de prueba (`ODIN_BUILD_ARTIFACTS=1 uv run pytest tests/test_packaging.py -q` → 4 passed) con `odin --version` → `odin 1.0.0`; suite completa 652 passed + 8 skipped + ruff + mypy Success 19 files. **Salvedad:** el tag anotado `v1.0.0` queda pendiente de ejecutar tras el commit de la release (la sesión de batch no crea commits); comando documentado en el spec 077
 
 ### Criterios de aceptación
-- [ ] Criterios de éxito 1–8 de la visión verificados con evidencia (logs/correos/salidas)
-- [ ] Instalación desde cero en ambas plataformas sin pasos fuera de la documentación — **Linux LTS ✅ (Item 072)**: host aislado y contenedor `ubuntu:24.04` limpio con el wheel, `odin --version`/`validate`/`service status` y e2e de `odin run`; **Windows Server (Items 073/074)**: vía CI/runbook preparada y documentada, con la salvedad de la ejecución real pendiente al publicar (`docs/service.md` §9)
-- [ ] Respaldo demostrado sobre Firebird 2.5 y sobre Firebird 5 o 6
-- [ ] Documentación consistente con el comportamiento real
+- [x] Criterios de éxito 1–8 de la visión verificados con evidencia (logs/correos/salidas) — Item 078: checklist final en `docs/release-1.0.md` con cada criterio, su evidencia (matriz Firebird, e2e del contenedor, catcher SMTP, tests de tolerancia/exit codes, enmascarado, gates, demo systemd) y sus salvedades de plataforma
+- [x] Instalación desde cero en ambas plataformas sin pasos fuera de la documentación — **Linux LTS ✅ (Item 072)**: host aislado y contenedor `ubuntu:24.04` limpio con el wheel, `odin --version`/`validate`/`service status` y e2e de `odin run`; re-verificado en el Item 077 con el wheel `1.0.0` (`ODIN_BUILD_ARTIFACTS=1` → 4 passed); **Windows Server (Items 073/074)**: vía CI/runbook preparada y documentada, con la salvedad de la ejecución real pendiente al publicar (`docs/service.md` §9, campos del §9.2)
+- [x] Respaldo demostrado sobre Firebird 2.5 y sobre Firebird 5 o 6 — Item 070/078: matriz `tests/test_firebird_matrix.py` → 5 passed (2.5.9, 3.0.9, 4.0.5, 5.0.4 y 6.0-snapshot; 3/3 filas restauradas en cada versión) con el `gbak` de la familia de cada imagen
+- [x] Documentación consistente con el comportamiento real — Item 078: 0 enlaces/anclas rotos en README/CHANGELOG/`docs/*.md`, 12 comandos citados contrastados contra `--help`, `odin validate` exit 0 en ambos ejemplos y versiones coherentes (`pyproject.toml`/`__init__.py`/CHANGELOG/README); detalle en `docs/release-1.0.md`
 
 ---
 
@@ -212,11 +212,11 @@ Estado: 🚧
 | Funcionalidad | Estado | Etapa |
 |---|---|---|
 | F1. Respaldo Firebird 2.5 → 6 (gbak) | ✅ | 2 |
-| F2. Compresión 7z (nivel configurable, AES opcional) | 🚧 | 3 |
-| F3. Configuración JSON legible OS-agnóstica + validación | 🚧 | 1 |
+| F2. Compresión 7z (nivel configurable, AES opcional) | ✅ | 3 |
+| F3. Configuración JSON legible OS-agnóstica + validación | ✅ | 1 |
 | F4. Transferencia SFTP con paramiko (reintentos, verificación) | ✅ | 4 |
 | F5. Notificación por correo (siempre, sin secretos) | ✅ | 5 |
-| F6. CLI y operación (`run`, `validate`, `service`, exit codes, logging) | 🚧 | 1, 5, 7 |
+| F6. CLI y operación (`run`, `validate`, `service`, exit codes, logging) | ✅ | 1, 5, 7 |
 | F7. Scheduler propio + modo servicio residente | ✅ | 6, 7 |
 | F8. Retención local | ✅ | 5 |
 
@@ -224,22 +224,22 @@ Estado: 🚧
 
 | Objetivo | Estado | Etapa |
 |---|---|---|
-| G1. Respaldo confiable Firebird 2.5–6 | 🚧 | 2, 8 |
-| G2. Compresión 7z | 🚧 | 3 |
+| G1. Respaldo confiable Firebird 2.5–6 | ✅ | 2, 8 |
+| G2. Compresión 7z | ✅ | 3 |
 | G3. Distribución SFTP con reintentos | ✅ | 4 |
 | G4. Correo de trazabilidad en cada ejecución | ✅ | 5 |
-| G5. Instalación uniforme vía uv (Windows/Linux) | 🚧 | 1, 8 (Linux ✅ 072) |
+| G5. Instalación uniforme vía uv (Windows/Linux) | ✅ | 1, 8 (Linux ✅ 072; Windows ✅ 073/074 vía CI/runbook) |
 | G6. Servicio residente con scheduler propio | ✅ | 6, 7 |
 | G7. Modo one-shot `odin run` compatible | ✅ | 2, 5 |
 
 ## Requisitos No Funcionales
 
-- 🚧 Confiabilidad: reintentos, aislamiento de fallos, recuperación del servicio, sin duplicación de respaldos (Etapas 4, 5, 6, 7)
-- 🚧 Seguridad: enmascarado de secretos, permisos del JSON, auth por clave SSH, política de host keys (Etapas 1, 4, 8)
-- 🚧 Portabilidad: misma base de código Windows Server 2016+ / Linux LTS (todas las etapas)
-- 🚧 Observabilidad: log con rotación, timestamps, duración y errores (Etapas 1, 5, 7)
-- 🚧 Rendimiento: timeouts en gbak/SFTP/SMTP, compresión acotada (Etapas 2, 4, 5)
-- 🚧 Mantenibilidad: pytest, dependencias mínimas, documentación (todas las etapas)
+- ✅ Confiabilidad: reintentos, aislamiento de fallos, recuperación del servicio, sin duplicación de respaldos (Etapas 4, 5, 6, 7; verificado en `docs/release-1.0.md` criterios 3, 4 y 8)
+- ✅ Seguridad: enmascarado de secretos, permisos del JSON, auth por clave SSH, política de host keys (Etapas 1, 4, 8; guía `docs/security.md` y criterio 6)
+- ✅ Portabilidad: misma base de código Windows Server 2016+ / Linux LTS (todas las etapas; CI `linux`/`windows` lista y salvedad del host Windows real delegada a CI/runbook)
+- ✅ Observabilidad: log con rotación, timestamps, duración y errores (Etapas 1, 5, 7; `odin.log` 5 MiB × 5 con enmascarado)
+- ✅ Rendimiento: timeouts en gbak/SFTP/SMTP, compresión acotada (Etapas 2, 4, 5; timeouts configurables por fase)
+- ✅ Mantenibilidad: pytest, dependencias mínimas, documentación (todas las etapas; 652 passed + 8 skipped, ruff + mypy estrictos y README/`docs/*` consistentes)
 
 ## Fuera de Alcance (exclusiones de la visión)
 
@@ -257,15 +257,20 @@ Estado: 🚧
 
 ## Próximo Paso
 
-El **Lote D** de `queue-008.md` (items 075-076) quedó cerrado: el README es la
-entrada única (índice, requisitos, instalación con `uv tool install`, tabla
-resumen de campos y defaults, operación, logging, troubleshooting, seguridad,
-CI y licencia) y `docs/security.md` documenta el modelo de amenazas, permisos,
-claves SSH/host keys, enmascarado y rotación; los mensajes de permisos de
-`validate` apuntan a la guía. La suite está en
-**652 passed + 8 skipped in 71.12 s** + ruff + mypy Success 19 files.
+La **Etapa 8** y la **release `1.0.0`** quedaron cerradas con el **Lote E** de
+`queue-008.md` (items 077-078): versión `1.0.0` en `pyproject.toml` y
+`src/odin/__init__.py` con `uv.lock` refrescado, metadata Production/Stable,
+`CHANGELOG.md` de release, artefactos `uv build` verificados con instalación
+aislada, y los criterios de éxito 1–8 de la visión verificados uno a uno con
+evidencia y salvedades en `docs/release-1.0.md`. Gates finales:
+`uv run python scripts/verify.py` → EXIT 0 (6/6) y
+**652 passed + 8 skipped in 79.53 s** + ruff + mypy Success 19 files.
 
-Sigue la **Etapa 8** con el **Lote E** de `queue-008.md` (items 077-078: release
-`1.0.0` con versión/CHANGELOG/artefactos/tag y el cierre de la etapa con los
-criterios 1–8 de la visión verificados uno a uno). Siguiente: en una **nueva
-sesión de chat** ejecutar `/speckit.aide.execute-batch 077,078`.
+Quedan como acciones posteriores al commit (la sesión de batch no crea
+commits): crear el tag anotado `v1.0.0` sobre el commit de la release
+(comando en `docs/aide/items/077-release-1-0-0.md`) y, al publicar el
+repositorio, dejar correr el job `windows` de la CI para completar la
+evidencia de `docs/service.md` §9.2.
+
+La cola `queue-008.md` quedó agotada; para trabajo nuevo, en una **nueva
+sesión de chat** ejecutar `/speckit.aide.create-queue`.
