@@ -306,6 +306,7 @@ def test_private_key_open_permissions_warn(tmp_path: Path) -> None:
     assert Severity.OK in severities
     assert "644" in _messages(report, PRIVATE_KEY)
     assert "600" in _messages(report, PRIVATE_KEY)
+    assert "docs/security.md" in _messages(report, PRIVATE_KEY)
 
 
 def test_password_method_server_gets_no_private_key_check(tmp_path: Path) -> None:
@@ -378,6 +379,7 @@ def test_config_file_open_permissions_warn(tmp_path: Path) -> None:
     report = validate_config(_config(tmp_path, mode=0o644), host_is_windows=False)
     assert _severities(report, "config") == [Severity.WARNING]
     assert "644" in _messages(report, "config")
+    assert "docs/security.md" in _messages(report, "config")
     assert report.is_valid()
 
 
@@ -385,6 +387,7 @@ def test_config_file_permissions_skipped_on_windows_host(tmp_path: Path) -> None
     report = validate_config(_config(tmp_path, mode=0o644), host_is_windows=True)
     assert _severities(report, "config") == [Severity.INFO]
     assert "ACL" in _messages(report, "config")
+    assert "docs/security.md" in _messages(report, "config")
 
 
 # --- sabor de ruta vs. SO anfitrión ---

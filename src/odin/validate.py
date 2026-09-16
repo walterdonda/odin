@@ -60,6 +60,7 @@ __all__ = [
 _ROOT = "config"
 _MB = 1024 * 1024
 _RECOMMENDED_MODE = "600"
+_SECURITY_GUIDE = "docs/security.md"
 PARSE_SKIPPED_NOTE = (
     "No se ejecutaron las verificaciones de entorno: la configuración no pudo cargarse."
 )
@@ -415,7 +416,7 @@ def _check_private_keys(report: ValidationReport, config: Config, host_is_window
                     Severity.WARNING,
                     field_path,
                     f"permisos {_mode(path)} con acceso de grupo/otros; se recomienda "
-                    f"{_RECOMMENDED_MODE} ({path})",
+                    f"{_RECOMMENDED_MODE} (guía de seguridad: {_SECURITY_GUIDE}) ({path})",
                     check="private_key_mode",
                 )
         report.add(
@@ -482,7 +483,8 @@ def _check_config_file(report: ValidationReport, config: Config, host_is_windows
             Severity.INFO,
             _ROOT,
             "verificación de permisos omitida en Windows: las ACL no son comprobables "
-            "de forma portable; restrinja el acceso al archivo de configuración",
+            "de forma portable; restrinja el acceso al archivo de configuración "
+            f"(guía de seguridad: {_SECURITY_GUIDE})",
             check="config_file_mode",
         )
         return
@@ -501,7 +503,8 @@ def _check_config_file(report: ValidationReport, config: Config, host_is_windows
             Severity.WARNING,
             _ROOT,
             f"el archivo de configuración tiene permisos {mode:03o}; se recomienda "
-            f"{_RECOMMENDED_MODE} (contiene credenciales en texto legible)",
+            f"{_RECOMMENDED_MODE} (contiene credenciales en texto legible; "
+            f"guía de seguridad: {_SECURITY_GUIDE})",
             check="config_file_mode",
         )
     else:
