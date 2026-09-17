@@ -10,3 +10,6 @@ extensions/*/local-config.yml
 
 # Local extension catalog/download cache.
 extensions/.cache/
+
+# Local preset catalog/download cache.
+presets/.cache/

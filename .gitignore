@@ -10,6 +10,7 @@ wheels/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.gitnexus/
 .coverage
 coverage.xml
 htmlcov/
