@@ -141,6 +141,30 @@ ServiceFactory = Callable[..., SchedulerService]
 ManagerFactory = Callable[..., ServiceManager]
 
 
+def _force_utf8_stdio() -> None:
+    """Reconfigura ``sys.stdout``/``sys.stderr`` a UTF-8 (tolerante si no se puede).
+
+    En Windows, cuando la salida está redirigida (pipe o archivo: ``odin run >
+    resumen.txt``, un scheduler externo que capture la salida), Python usa el
+    ANSI codepage (``cp1252``) para los streams y un carácter del resumen como
+    ``→`` (U+2192) lanza ``UnicodeEncodeError`` y termina la corrida con exit 1
+    aunque el respaldo haya sido exitoso. La consola interactiva (PEP 528) y
+    POSIX ya usan UTF-8, así que esto solo uniformiza el caso redirigido: la
+    salida pasa a coincidir con Linux, con ``odin.log`` (UTF-8) y con el
+    default de Python 3.15 (PEP 686). Streams sin ``reconfigure`` (p. ej. el
+    writer del servicio en ``redirect_stdio_to_log``, ya UTF-8) o cerrados se
+    dejan como están.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8")
+        except (OSError, ValueError):
+            continue
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Construye el parser raíz de la CLI de ODIN.
 
@@ -990,7 +1014,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     no matan el proceso con un traceback sin manejar: mensaje + traceback en
     stderr y ``EXIT_INTERNAL``. ``ConfigError`` que escape de un handler se
     traduce a ``EXIT_CONFIG`` (red de seguridad para los subcomandos futuros).
+    Antes de parsear reconfigura stdio a UTF-8 (``_force_utf8_stdio``): el
+    resumen usa ``→`` y en Windows con salida redirigida (``cp1252``) eso
+    lanzaba ``UnicodeEncodeError`` tras un respaldo exitoso.
     """
+    _force_utf8_stdio()
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command is None:
