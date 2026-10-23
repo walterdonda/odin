@@ -155,6 +155,7 @@ def _prepare_service_host_dlls(modules: Win32Modules) -> Path:
     major, minor = sys.version_info[:2]
     names = (
         f"python{major}{minor}.dll",
+        "python3.dll",
         f"pywintypes{major}{minor}.dll",
         "vcruntime140.dll",
         "vcruntime140_1.dll",

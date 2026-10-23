@@ -293,6 +293,7 @@ def test_install_copies_dlls_next_to_host_for_venv(
     major, minor = sys.version_info[:2]
     names = (
         f"python{major}{minor}.dll",
+        "python3.dll",
         f"pywintypes{major}{minor}.dll",
         "vcruntime140.dll",
         "vcruntime140_1.dll",
