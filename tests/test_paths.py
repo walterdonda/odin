@@ -2,7 +2,7 @@
 
 import getpass
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -85,7 +85,10 @@ def test_relative_without_base_kept_relative() -> None:
 
 def test_double_slash_posix_is_absolute() -> None:
     result = normalize_path("//srv/share", base_dir=BASE)
-    assert result.as_posix() == "//srv/share"
+    # En Windows ``//srv/share`` es un share UNC y ``as_posix()`` agrega una
+    # barra final (raíz del share); se compara sin esa barra opcional.
+    assert result.as_posix().rstrip("/") == "//srv/share"
+    assert PurePosixPath(result.as_posix()).is_absolute()
 
 
 def test_whitespace_stripped() -> None:

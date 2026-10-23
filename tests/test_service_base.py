@@ -9,6 +9,7 @@ de despacho real); el resto es contrato puro (dataclasses, validaciones, ABC).
 from __future__ import annotations
 
 import dataclasses
+import subprocess
 import sys
 import types
 from pathlib import Path
@@ -115,11 +116,15 @@ def test_dispatch_win32_does_not_require_pywin32(monkeypatch: pytest.MonkeyPatch
         ServiceManagerKind.WINDOWS,
         created,
     )
+    before = set(sys.modules)
     manager = create_service_manager(CONFIG_PATH, platform="win32")
     assert manager.manager is ServiceManagerKind.WINDOWS
     assert created[0].config_path == CONFIG_PATH
-    assert "win32serviceutil" not in sys.modules
-    assert "win32service" not in sys.modules
+    # ``sys.modules`` es global: otros tests pueden haber importado pywin32
+    # antes. Lo que este contrato exige es que el despacho no lo importe.
+    imported = set(sys.modules) - before
+    assert "win32serviceutil" not in imported
+    assert "win32service" not in imported
 
 
 def test_dispatch_unsupported_platform_raises() -> None:
@@ -128,9 +133,23 @@ def test_dispatch_unsupported_platform_raises() -> None:
 
 
 def test_package_import_is_lazy_about_pywin32() -> None:
-    assert "odin.service" in sys.modules
-    assert "win32serviceutil" not in sys.modules
-    assert "win32service" not in sys.modules
+    """Importar ``odin.service`` no toca pywin32 (se verifica en un proceso limpio).
+
+    En el proceso de pytest, tests anteriores de la CLI pueden haber importado
+    pywin32 de forma legítima; el contrato de import perezoso solo es
+    verificable sin ese estado acumulado.
+    """
+    code = (
+        "import sys\n"
+        "import odin.service\n"
+        "assert 'odin.service' in sys.modules\n"
+        "assert 'win32serviceutil' not in sys.modules\n"
+        "assert 'win32service' not in sys.modules\n"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 # --- ServiceSpec: validación y derivados ---
