@@ -119,6 +119,17 @@ def _key(tmp_path: Path, *, name: str = "id_test", mode: int = 0o600) -> Path:
     return key
 
 
+def _host_key_insegura(data: dict[str, Any]) -> None:
+    """Advertencia garantizada en cualquier plataforma y sin tocar el filesystem.
+
+    Los permisos POSIX del JSON (chmod 644) no producen advertencia en un host
+    Windows —el check de modo se omite ahí—, así que los tests que necesitan
+    *exactamente una* advertencia usan la política ``insecure`` del servidor
+    SFTP, que advierte en ambos SO.
+    """
+    data["servers"][0]["host_key_policy"] = "insecure"
+
+
 # --- validate exitoso ---
 
 
@@ -286,11 +297,13 @@ def test_validate_help_lists_strict_flag(capsys: pytest.CaptureFixture[str]) -> 
 def test_validate_reports_warnings_and_still_exits_0(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    config_path = _write_config(tmp_path, mode=0o644, private_key=_key(tmp_path))
+    config_path = _write_config(
+        tmp_path, mode=0o600, private_key=_key(tmp_path), mutate=_host_key_insegura
+    )
     assert main(["validate", "--config", str(config_path)]) == EXIT_OK
     captured = capsys.readouterr()
     assert "ADVERTENCIAS (1):" in captured.out
-    assert "permisos 644" in captured.out
+    assert "no verifica la host key" in captured.out
     assert "VERIFICACIONES" in captured.out
     assert "Configuración válida" in captured.out
     assert "1 advertencia(s)" in captured.out
@@ -318,7 +331,9 @@ def test_validate_environment_error_exits_2_with_errors_on_stderr(
 def test_validate_strict_promotes_warnings_to_exit_2(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    config_path = _write_config(tmp_path, mode=0o644, private_key=_key(tmp_path))
+    config_path = _write_config(
+        tmp_path, mode=0o600, private_key=_key(tmp_path), mutate=_host_key_insegura
+    )
     assert main(["validate", "--config", str(config_path), "--strict"]) == EXIT_CONFIG
     captured = capsys.readouterr()
     assert "--strict" in captured.err
@@ -390,13 +405,19 @@ def test_windows_flavored_config_exits_0_on_any_host(
 def test_findings_are_logged_with_counts_and_without_secrets(tmp_path: Path) -> None:
     work_dir = tmp_path / "work"
     work_dir.mkdir()
-    config_path = _write_config(tmp_path, work_dir=work_dir, mode=0o644, private_key=_key(tmp_path))
+    config_path = _write_config(
+        tmp_path,
+        work_dir=work_dir,
+        mode=0o600,
+        private_key=_key(tmp_path),
+        mutate=_host_key_insegura,
+    )
     assert main(["validate", "--config", str(config_path)]) == EXIT_OK
     log_path = load_config(config_path).local.resolved_log_dir / LOG_FILENAME
     content = log_path.read_text(encoding="utf-8")
     assert "Configuración válida con advertencias" in content
     assert "errores: 0 | advertencias: 1" in content
-    assert "config: el archivo de configuración tiene permisos 644" in content
+    assert "config.servers[0].host_key_policy: 'insecure' no verifica la host key" in content
     for secreto in ("masterkey", "remote-secret-1", "smtp-secret"):
         assert secreto not in content
 

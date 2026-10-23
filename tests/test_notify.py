@@ -356,8 +356,8 @@ def test_render_success_state(tmp_path: Path) -> None:
     assert report.subject == "[ODIN] ÉXITO — respaldo de srv-prueba (2026-09-15 10:30:00)"
     assert "Estado global: ÉXITO" in report.body
     assert "- erp_principal: OK" in report.body
-    assert "/work/erp_principal.fbk (100 bytes, 0.1 s)" in report.body
-    assert "/work/erp_principal.fbk.7z (40 bytes, 0.2 s)" in report.body
+    assert f"{Path('/work/erp_principal.fbk')} (100 bytes, 0.1 s)" in report.body
+    assert f"{Path('/work/erp_principal.fbk.7z')} (40 bytes, 0.2 s)" in report.body
     assert "transferencia: 2/2 destino(s) OK" in report.body
     assert (
         "- erp_principal → sitio-alterno-1: OK /backups/firebird/erp_principal.fbk.7z "

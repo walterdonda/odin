@@ -21,8 +21,9 @@ Pasos e ids:
 
 Todos los pasos seleccionados se ejecutan aunque uno falle (para tener el
 panorama completo en una sola corrida). Cada uno imprime el comando, su
-duración y su estado; los fallos suman las últimas líneas de su salida y el
-resumen final queda en el exit code:
+duración y su estado; los fallos listan todas las líneas ``FAILED``/``ERROR``
+de pytest (el resumen completo de tests caídos) y las últimas líneas de su
+salida, y el resumen final queda en el exit code:
 
 - ``0``: todos los pasos seleccionados pasan.
 - ``1``: al menos un paso falla.
@@ -187,7 +188,14 @@ def render_step(result: GateResult) -> str:
         f"    {status} en {result.duration_seconds:.2f} s",
     ]
     if not result.ok and result.output.strip():
-        tail = result.output.strip().splitlines()[-OUTPUT_TAIL_LINES:]
+        all_lines = result.output.strip().splitlines()
+        failures = [
+            line for line in all_lines if line.startswith(("FAILED ", "ERROR "))
+        ]
+        if failures:
+            lines.append(f"    --- fallos ({len(failures)}) ---")
+            lines.extend(f"    {line}" for line in failures)
+        tail = all_lines[-OUTPUT_TAIL_LINES:]
         lines.append(f"    --- últimas {len(tail)} línea(s) ---")
         lines.extend(f"    {line}" for line in tail)
     return "\n".join(lines)

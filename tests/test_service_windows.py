@@ -37,7 +37,11 @@ from odin.service.windows import (
     WindowsServiceManager,
 )
 
-CONFIG_PATH = Path("/etc/odin/config.json")
+CONFIG_PATH = (
+    Path("C:/odin/config.json")
+    if sys.platform == "win32"
+    else Path("/etc/odin/config.json")
+)
 PYWIN32_AVAILABLE = importlib.util.find_spec("win32serviceutil") is not None
 
 

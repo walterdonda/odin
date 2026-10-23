@@ -9,6 +9,7 @@ con ``can_write_unit`` inyectable.
 from __future__ import annotations
 
 import subprocess
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -25,11 +26,13 @@ from odin.service.linux import (
     UNIT_NAME,
     CommandResult,
     LinuxServiceManager,
+    _quote_argument,
     render_unit,
 )
 
-CONFIG_PATH = Path("/etc/odin/config.json")
-EXECUTABLE = "/opt/odin/bin/odin"
+IS_WINDOWS = sys.platform == "win32"
+CONFIG_PATH = Path("C:/odin/config.json") if IS_WINDOWS else Path("/etc/odin/config.json")
+EXECUTABLE = "C:/odin/bin/odin" if IS_WINDOWS else "/opt/odin/bin/odin"
 SHOW_COMMAND = (
     "show",
     UNIT_NAME,
@@ -104,8 +107,11 @@ def test_render_unit_has_required_sections_and_absolute_exec_start() -> None:
     assert "Wants=network-online.target" in unit
     assert "[Service]" in unit
     assert "Type=simple" in unit
-    assert f"ExecStart={EXECUTABLE} service run --config {CONFIG_PATH}" in unit
-    assert f"WorkingDirectory={CONFIG_PATH.parent}" in unit
+    assert (
+        f"ExecStart={_quote_argument(EXECUTABLE)} service run --config "
+        f"{_quote_argument(str(CONFIG_PATH))}"
+    ) in unit
+    assert f"WorkingDirectory={_quote_argument(str(CONFIG_PATH.parent))}" in unit
     assert "Restart=always" in unit
     assert "RestartSec=5" in unit
     assert "[Install]" in unit
@@ -119,11 +125,17 @@ def test_render_unit_rejects_relative_executable() -> None:
 
 
 def test_render_unit_quotes_paths_with_spaces() -> None:
-    unit = render_unit(
-        _spec(executable="/opt/odin dir/odin", config_path=Path("/srv/odin dir/config.json"))
+    executable = "C:/opt/odin dir/odin" if IS_WINDOWS else "/opt/odin dir/odin"
+    config_path = (
+        Path("C:/srv/odin dir/config.json")
+        if IS_WINDOWS
+        else Path("/srv/odin dir/config.json")
     )
-    assert 'ExecStart="/opt/odin dir/odin" service run --config "/srv/odin dir/config.json"' in unit
-    assert 'WorkingDirectory="/srv/odin dir"' in unit
+    unit = render_unit(_spec(executable=executable, config_path=config_path))
+    expected_config = _quote_argument(str(config_path))
+    expected_work_dir = _quote_argument(str(config_path.parent))
+    assert f"ExecStart={_quote_argument(executable)} service run --config {expected_config}" in unit
+    assert f"WorkingDirectory={expected_work_dir}" in unit
 
 
 def test_render_unit_with_account_user_and_group() -> None:

@@ -44,7 +44,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import pytest
@@ -57,6 +57,7 @@ from odin.service.linux import (
     UNIT_NAME,
     CommandResult,
     LinuxServiceManager,
+    _quote_argument,
     render_unit,
 )
 from tests.smtp_catcher import SmtpCatcher, parse_message
@@ -124,10 +125,12 @@ def test_reference_unit_is_structurally_sound() -> None:
     exec_start = _directive(service, "ExecStart")
     assert exec_start is not None
     parts = exec_start.split()
-    assert Path(parts[0]).is_absolute(), "ExecStart debe ser absoluto"
+    # La unit es un artefacto Linux: la absolutitud se juzga con sintaxis POSIX
+    # aunque el test corra en un host Windows (Path('/opt/...') no es absoluta ahí).
+    assert PurePosixPath(parts[0]).is_absolute(), "ExecStart debe ser absoluto"
     assert parts[1:3] == ["service", "run"]
     assert parts[3] == "--config"
-    assert Path(parts[4]).is_absolute(), "la config de ExecStart debe ser absoluta"
+    assert PurePosixPath(parts[4]).is_absolute(), "la config de ExecStart debe ser absoluta"
     assert _directive(service, "Restart") == "always"
     assert _directive(service, "WorkingDirectory") is not None
 
@@ -271,7 +274,7 @@ def test_cli_lifecycle_with_fake_systemctl(
     assert unit.startswith("[Unit]\n")
     assert "Type=simple" in unit
     assert "Restart=always" in unit
-    assert f"service run --config {config_path}" in unit
+    assert f"service run --config {_quote_argument(str(config_path))}" in unit
     assert "Siguiente paso" in capsys.readouterr().out
 
     assert main(["service", "start"]) == EXIT_OK

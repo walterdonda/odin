@@ -1,3 +1,4 @@
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -95,7 +96,7 @@ class TestSFTPTransfer(unittest.TestCase):
 
         self.transfer.connect()
 
-        local_file = Path("/tmp/test.file")
+        local_file = Path(tempfile.gettempdir()) / "test.file"
         local_file.write_text("a" * 100)
 
         remote_path = "/remote/path/test.file"
@@ -133,7 +134,7 @@ class TestSFTPTransfer(unittest.TestCase):
 
         self.transfer.connect()
 
-        local_file = Path("/tmp/test.file")
+        local_file = Path(tempfile.gettempdir()) / "test.file"
         local_file.write_text("a" * 100)
 
         remote_path = "/remote/path/test.file"
@@ -163,7 +164,7 @@ class TestSFTPTransfer(unittest.TestCase):
 
         self.transfer.connect()
 
-        local_file = Path("/tmp/test.file")
+        local_file = Path(tempfile.gettempdir()) / "test.file"
         local_file.write_text("a" * 100)
 
         remote_path = "/remote/path/test.file"
@@ -187,7 +188,7 @@ class TestSFTPTransfer(unittest.TestCase):
 
         mock_sftp_instance.put.side_effect = Exception("Disk full")
 
-        local_file = Path("/tmp/int.file")
+        local_file = Path(tempfile.gettempdir()) / "int.file"
         local_file.write_text("a" * 100)
         remote_path = "/remote/path/test.file"
 

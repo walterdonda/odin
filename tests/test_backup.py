@@ -203,7 +203,9 @@ def test_auto_detection_when_no_path_given(tmp_path: Path) -> None:
         result = BackupExecutor().run_backup("db_name", "db.fdb", str(backup))
 
     assert result.success
-    assert mock_run.call_args.args[0][0] == GBACK
+    # ``find_gbak`` devuelve el binario como ``Path`` del host: en Windows
+    # '/usr/bin/gbak' se stringifica con '\', así que se compara por as_posix.
+    assert Path(mock_run.call_args.args[0][0]).as_posix() == GBACK
 
 
 def test_gbak_not_found_is_reported_in_result(tmp_path: Path) -> None:

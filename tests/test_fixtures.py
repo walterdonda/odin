@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterator
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -215,7 +215,7 @@ def test_platform_path_flavors() -> None:
     relative = load_config(RELATIVE_FIXTURE)
     # POSIX absoluto (fixture Linux existente).
     assert linux.local.work_dir == Path("/var/backups/odin")
-    assert linux.local.work_dir.is_absolute()
+    assert PurePosixPath(linux.local.work_dir.as_posix()).is_absolute()
     # Windows con letra de unidad, en forma canónica posix (fixture Windows existente).
     assert windows.local.work_dir.as_posix() == "D:/Backups/odin"
     # Relativa resuelta contra el directorio del JSON (fixture nuevo).

@@ -30,7 +30,12 @@ from odin.service import (
     ensure_absolute_config_path,
 )
 
-CONFIG_PATH = Path("/etc/odin/config.json")
+CONFIG_PATH = (
+    Path("C:/odin/config.json")
+    if sys.platform == "win32"
+    else Path("/etc/odin/config.json")
+)
+WORK_DIR = Path("C:/var/lib/odin") if sys.platform == "win32" else Path("/var/lib/odin")
 
 
 class _FakeManager(ServiceManager):
@@ -172,10 +177,10 @@ def test_service_spec_accepts_explicit_executable_and_working_dir() -> None:
     spec = ServiceSpec(
         config_path=CONFIG_PATH,
         executable="/opt/odin/bin/odin",
-        working_dir=Path("/var/lib/odin"),
+        working_dir=WORK_DIR,
     )
     assert spec.argv[0] == "/opt/odin/bin/odin"
-    assert spec.resolved_working_dir == Path("/var/lib/odin")
+    assert spec.resolved_working_dir == WORK_DIR
 
 
 def test_service_spec_round_trip_equality_and_frozen() -> None:

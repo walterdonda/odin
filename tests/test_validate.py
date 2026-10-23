@@ -95,6 +95,16 @@ def _config(
     return load_config(_write_config(tmp_path, work_dir=work_dir, mutate=mutate, mode=mode))
 
 
+def _host_key_insegura(data: dict[str, Any]) -> None:
+    """Advertencia portable aunque el ``work_dir`` sea un archivo regular.
+
+    El chequeo de espacio libre se omite cuando el ``work_dir`` no es un
+    directorio (el test de secciones necesita ese error); la política
+    ``insecure`` del servidor SFTP advierte en cualquier caso.
+    """
+    data["servers"][0]["host_key_policy"] = "insecure"
+
+
 def _of(report: ValidationReport, field_path: str) -> list[Finding]:
     return [finding for finding in report.findings if finding.field_path == field_path]
 
@@ -369,6 +379,7 @@ def test_gbak_path_not_executable_warns(tmp_path: Path) -> None:
 # --- permisos del JSON ---
 
 
+@sin_permisos_posix
 def test_config_file_restricted_is_ok(tmp_path: Path) -> None:
     report = validate_config(_config(tmp_path, mode=0o600), host_is_windows=False)
     assert _severities(report, "config") == [Severity.OK]
@@ -408,7 +419,11 @@ def test_windows_flavor_disk_space_check_is_skipped_on_posix_host() -> None:
 
 
 def test_posix_flavor_work_dir_is_omitted_on_windows_host(tmp_path: Path) -> None:
-    report = validate_config(_config(tmp_path), host_is_windows=True)
+    def mutate(data: dict[str, Any]) -> None:
+        data["local"]["work_dir"] = "/var/backups/odin"
+        data["servers"][1]["auth"]["private_key"] = "/home/odin/.ssh/id_ed25519"
+
+    report = validate_config(_config(tmp_path, mutate=mutate), host_is_windows=True)
     assert _severities(report, WORK_DIR) == [Severity.INFO]
     assert "no comprobable en Windows" in _messages(report, WORK_DIR)
     assert _severities(report, PRIVATE_KEY) == [Severity.INFO]
@@ -568,7 +583,7 @@ def test_render_stderr_includes_parse_skipped_note(tmp_path: Path) -> None:
 def test_render_report_groups_sections_with_counts(tmp_path: Path) -> None:
     archivo = tmp_path / "archivo.txt"
     archivo.write_text("x", encoding="utf-8")
-    report = validate_config(_config(tmp_path, work_dir=archivo, mode=0o644))
+    report = validate_config(_config(tmp_path, work_dir=archivo, mutate=_host_key_insegura))
     text = render_report(report)
     assert "ODIN validate —" in text
     assert f"ERRORES ({len(report.errors)}):" in text
@@ -595,7 +610,7 @@ def test_render_stderr_is_empty_when_valid(tmp_path: Path) -> None:
 
 
 def test_render_stderr_mentions_strict_when_only_warnings(tmp_path: Path) -> None:
-    report = validate_config(_config(tmp_path, mode=0o644))
+    report = validate_config(_config(tmp_path, mutate=_host_key_insegura))
     assert report.is_valid()
     assert not report.is_valid(strict=True)
     stderr = render_stderr(report, strict=True)

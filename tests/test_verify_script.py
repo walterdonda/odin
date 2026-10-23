@@ -173,11 +173,18 @@ def test_run_gate_missing_command_is_a_failure() -> None:
 def test_render_step_and_summary() -> None:
     gate = verify.Gate("ruff", "Lint (ruff)", ("uv", "run", "ruff"))
     ok = verify.GateResult(gate, 0, 1.5, "")
-    bad = verify.GateResult(gate, 2, 0.5, "detalle")
+    bad = verify.GateResult(
+        gate,
+        2,
+        0.5,
+        "FAILED tests/test_x.py::test_uno - fallo\nFAILED tests/test_x.py::test_dos\ncola",
+    )
     step = verify.render_step(bad)
     assert "$ uv run ruff" in step
     assert "FALLO (código 2)" in step
-    assert "detalle" in step
+    assert "--- fallos (2) ---" in step
+    assert "FAILED tests/test_x.py::test_dos" in step
+    assert "cola" in step
     summary = verify.render_summary([ok, bad])
     assert "[OK   ] Lint (ruff) (1.50 s)" in summary
     assert "[FALLO] Lint (ruff) (0.50 s)" in summary

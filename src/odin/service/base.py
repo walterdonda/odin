@@ -42,8 +42,10 @@ import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any, ClassVar, Protocol, cast
+
+from odin.paths import is_windows_flavor
 
 __all__ = [
     "DEFAULT_DESCRIPTION",
@@ -98,14 +100,23 @@ def ensure_absolute_config_path(config_path: Path | str) -> Path:
     del JSON no puede resolverse contra el cwd del proceso ni contra
     ``ODIN_CONFIG``, así que se exige una ruta absoluta en el momento de
     construir el ``ServiceSpec``.
+
+    La absolutitud se juzga por el *sabor* de la ruta — el mismo criterio
+    OS-agnóstico de ``odin.paths``—: ``/etc/odin/config.json`` es absoluta
+    aunque se evalúe en un host Windows (donde ``Path.is_absolute`` daría
+    ``False`` por no tener letra de unidad) y ``C:\\Datos\\config.json`` lo es
+    en cualquier SO. Solo se rechazan las rutas genuinamente relativas
+    (``config.json``, ``odin/config.json``), que son las que romperían al
+    servicio desatendido.
     """
-    path = Path(config_path)
-    if not path.is_absolute():
+    raw = str(config_path)
+    pure: PurePath = PureWindowsPath(raw) if is_windows_flavor(raw) else PurePosixPath(raw)
+    if not pure.is_absolute():
         raise ServiceError(
             "la ruta de configuración del servicio debe ser absoluta (el servicio "
-            f"corre desatendido y no depende del cwd): {path}"
+            f"corre desatendido y no depende del cwd): {raw}"
         )
-    return path
+    return Path(raw)
 
 
 @dataclass(frozen=True, slots=True)

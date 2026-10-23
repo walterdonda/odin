@@ -112,15 +112,23 @@ class SecretMasker:
     enmascara hasta el fin del texto (postura conservadora: tras un
     marcador BEGIN no hay forma de saber dónde termina el material de la
     clave).
+
+    Variantes de separador: por cada secreto se registran además sus variantes
+    con ``/``↔``\\`` intercambiados. ``odin.config`` normaliza las rutas al
+    ``Path`` del host (en Windows ``/home/odin/keys/id`` se guarda como
+    ``\\home\\odin\\keys\\id``) y el texto a enmascarar puede llegar con el
+    spelling original del JSON o con el normalizado; el masker cubre ambos.
     """
 
     def __init__(self, secrets: Iterable[str]) -> None:
         collected: list[str] = []
         for secret in secrets:
-            if not secret or len(secret) < MIN_SECRET_LENGTH:
-                continue
-            if secret not in collected:
-                collected.append(secret)
+            variants = (secret, secret.replace("/", "\\"), secret.replace("\\", "/"))
+            for variant in variants:
+                if not variant or len(variant) < MIN_SECRET_LENGTH:
+                    continue
+                if variant not in collected:
+                    collected.append(variant)
         collected.sort(key=len, reverse=True)
         self._secrets = tuple(collected)
 

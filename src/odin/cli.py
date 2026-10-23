@@ -135,6 +135,11 @@ ENV_CONFIG_VAR = "ODIN_CONFIG"
 # plataformas sin señal (Windows) dejan un archivo de control. La constante es
 # inyectable en tests para cubrir ambas ramas en cualquier SO.
 _RELOAD_VIA_SIGNAL = sys.platform != "win32" and hasattr(signal, "SIGUSR1")
+# ``signal.SIGUSR1`` no existe en Windows y mypy corriendo sobre un host win32
+# marca el acceso directo como attr-defined: se resuelve una sola vez con
+# ``getattr`` y la rama de señal queda guardada además por ``_RELOAD_VIA_SIGNAL``
+# (los tests de esa rama se saltan donde no hay SIGUSR1).
+_RELOAD_SIGNAL: signal.Signals | None = getattr(signal, "SIGUSR1", None)
 
 MaskFn = Callable[[str], str]
 ServiceFactory = Callable[..., SchedulerService]
@@ -835,9 +840,9 @@ def _cmd_service_reload(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return EXIT_INTERNAL
-    if _RELOAD_VIA_SIGNAL:
+    if _RELOAD_VIA_SIGNAL and _RELOAD_SIGNAL is not None:
         try:
-            os.kill(result.state.pid, signal.SIGUSR1)
+            os.kill(result.state.pid, _RELOAD_SIGNAL)
         except OSError as exc:
             print(
                 f"No se pudo enviar SIGUSR1 al pid {result.state.pid}: {exc}",
