@@ -154,11 +154,102 @@ def _dump_start_failure(
         path = Path(directory)
         dlls = sorted(item.name for item in path.glob("*.dll"))
         print(f"{label}={directory} dlls={dlls}")
+    pyvenv = Path(sys.exec_prefix) / "pyvenv.cfg"
+    if pyvenv.is_file():
+        print(f"--- {pyvenv} ---")
+        print(pyvenv.read_text(encoding="utf-8", errors="replace"))
     query = subprocess.run(
         ["sc.exe", "query", "odin"], capture_output=True, text=True, timeout=30
     )
     print("--- sc query odin ---")
     print(query.stdout or query.stderr)
+    _dump_service_registry()
+    _dump_event_log()
+    _dump_host_debug()
+
+
+def _dump_service_registry() -> None:
+    """Muestra el ImagePath y las opciones persistidas del servicio."""
+    import winreg
+
+    key_path = r"SYSTEM\CurrentControlSet\Services\odin"
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path) as key:
+            for name in ("ImagePath", "ObjectName", "PythonClass"):
+                try:
+                    print(f"{name}={winreg.QueryValueEx(key, name)[0]}")
+                except FileNotFoundError:
+                    print(f"{name}=<ausente>")
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path + r"\Parameters") as key:
+            index = 0
+            while True:
+                try:
+                    name, value, _ = winreg.EnumValue(key, index)
+                except OSError:
+                    break
+                print(f"Parameters.{name}={value!r}")
+                index += 1
+    except OSError as exc:
+        print(f"no se pudo leer el registro del servicio: {exc}")
+
+
+def _dump_event_log() -> None:
+    """Muestra los últimos eventos de Application ligados a Python/ODIN."""
+    try:
+        query = subprocess.run(
+            ["wevtutil", "qe", "Application", "/c:60", "/rd:true", "/f:text"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"no se pudo leer el Event Log: {exc}")
+        return
+    blocks = [
+        block
+        for block in (query.stdout or "").split("\n\n")
+        if block.strip()
+        and any(
+            needle in block.lower()
+            for needle in ("python", "odin", "pythonservice")
+        )
+    ]
+    print("--- Event Log (Application, python/odin) ---")
+    print("\n\n".join(blocks[-6:]) or "sin eventos de Python/ODIN")
+
+
+def _as_text(value: bytes | str | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode(errors="replace")
+    return value
+
+
+def _dump_host_debug() -> None:
+    """Corre el host en modo ``-debug`` (sin SCM) para ver el error real."""
+    host = Path(sys.exec_prefix) / "pythonservice.exe"
+    if not host.is_file():
+        print(f"--- host del servicio ausente: {host} ---")
+        return
+    try:
+        completed = subprocess.run(
+            [str(host), "-debug", "odin"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except subprocess.TimeoutExpired as exc:
+        print("--- host en modo -debug: siguió vivo (arranque OK) ---")
+        print(_as_text(exc.stdout))
+        print(_as_text(exc.stderr), file=sys.stderr)
+        return
+    except OSError as exc:
+        print(f"no se pudo ejecutar el host en modo -debug: {exc}")
+        return
+    print("--- host en modo -debug ---")
+    print(completed.stdout or "")
+    print(completed.stderr or "", file=sys.stderr)
 
 
 def test_windows_service_smoke_lifecycle(

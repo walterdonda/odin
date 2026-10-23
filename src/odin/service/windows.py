@@ -47,6 +47,7 @@ import shutil
 import sys
 import threading
 import time
+import traceback
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -248,8 +249,8 @@ def _build_service_class() -> type[Any]:
                 exit_code = self._runtime.run()
                 if exit_code != 0:
                     self._log_error(f"el servicio terminó con exit code {exit_code}")
-            except Exception as exc:  # noqa: BLE001 - un servicio no debe morir con traceback
-                self._log_error(f"fallo del servicio: {type(exc).__name__}: {exc}")
+            except Exception:  # noqa: BLE001 - un servicio no debe morir con traceback
+                self._log_error(f"fallo del servicio:\n{traceback.format_exc()}")
             finally:
                 self._finished.set()
 
