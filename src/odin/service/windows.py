@@ -277,6 +277,12 @@ def _build_service_class() -> type[Any]:
         def _log_error(self, message: str) -> None:
             with contextlib.suppress(Exception):
                 _import_win32().servicemanager.LogErrorMsg(message)
+            # En modo -debug (o si el Event Log no está disponible) el mensaje
+            # también se ve en la consola; en el servicio residente stderr es
+            # None y el suppress lo ignora.
+            with contextlib.suppress(Exception):
+                if sys.stderr is not None:
+                    print(message, file=sys.stderr, flush=True)
 
     OdinWindowsService.__name__ = "OdinWindowsService"
     OdinWindowsService.__qualname__ = "OdinWindowsService"
