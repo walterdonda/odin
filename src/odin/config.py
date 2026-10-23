@@ -833,7 +833,7 @@ def _parse_scheduler(v: _Validator, raw: dict[str, Any], path: str) -> Scheduler
     timezone_info: ZoneInfo | None = None
     try:
         timezone_info = ZoneInfo(timezone)
-    except ZoneInfoNotFoundError, ValueError:
+    except (ZoneInfoNotFoundError, ValueError):
         v.add(f"{path}.timezone", f"zona horaria desconocida: '{timezone}'")
     jobs: list[SchedulerJob] = []
     if "jobs" in raw:
