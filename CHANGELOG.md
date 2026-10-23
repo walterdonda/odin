@@ -7,6 +7,26 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## Unreleased
 
+### Corregido
+
+- **Windows**: `SyntaxError: multiple exception types must be parenthesized` al
+  importar con builds de Python 3.14 previas a la final (la `3.14.0a6` que
+  gestiona uv en Windows): el `except` de `_parse_scheduler` (`config.py`)
+  usaba la sintaxis PEP 758 sin paréntesis; ahora va entre paréntesis, válida
+  en toda la serie 3.x y semánticamente idéntica.
+- **Windows**: `UnicodeEncodeError: 'charmap' codec can't encode character
+  '\u2192'` al imprimir el resumen de `odin run` con la salida redirigida (ANSI
+  `cp1252`), que terminaba con exit 1 una corrida por lo demás exitosa: la CLI
+  reconfigura stdio a UTF-8 al arrancar (`_force_utf8_stdio`), en línea con
+  `odin.log` y con el default de Python 3.15 (PEP 686).
+
+### Documentación
+
+- Nota de despliegue para Windows (README, troubleshooting y compatibilidad):
+  instalar Python 3.14 **final** y no dejar que uv descargue la alpha
+  `3.14.0a6` de su registro gestionado, previa a PEP 758 y con ABI incompatible
+  con los wheels `cp314` de las dependencias.
+
 ## 1.0.0 - 2026-09-16
 
 Primera release estable: respaldo externo de bases Firebird 2.5 → 6 con

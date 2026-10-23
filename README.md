@@ -619,6 +619,7 @@ despliegue o en CI.
 | El servicio arranca y se detiene, o los ciclos fallan con `Permission denied` | La cuenta del servicio no lee el JSON, no escribe `work_dir`/logs o no ejecuta `gbak` | Ajustar dueño/permisos/ACL al usuario que corre el servicio; probar antes con `odin run --config …` con esa cuenta; ver [`docs/service.md`](docs/service.md) |
 | `odin service run` devuelve 2 al arrancar | `scheduler.enabled: false` o configuración inválida | Poner `scheduler.enabled: true`, definir al menos un job y correr `odin validate` |
 | La compresión falla con `No space left on device` | Disco lleno en `local.work_dir` | Liberar espacio o bajar `local.retention_days`; `validate` compara con `local.min_free_mb` |
+| `odin` en Windows falla al importar con `SyntaxError: multiple exception types must be parenthesized` o las dependencias mueren con `TypeError: bad argument type for built-in operation` | uv descargó la build **alpha** de Python 3.14 (`cpython-3.14.0a6`, la única 3.14 de su registro gestionado para Windows): es previa a la sintaxis PEP 758 y su ABI rompe los wheels `cp314` finales de `cffi`/`pycryptodomex` | Instalar Python 3.14 **final** (p. ej. `winget install Python.Python.3.14` o el instalador de python.org) y crear el entorno con `uv tool install --python <ruta>\python.exe …`; verificar con `python --version` que la versión no tenga sufijo `a` |
 
 ## Seguridad
 
@@ -687,6 +688,16 @@ Se ha verificado la compatibilidad de las dependencias principales con Python 3.
 - Se ha subido el floor de `pywin32` a `>=311` en `pyproject.toml` para reflejar el soporte real de wheels `cp314` en Python 3.14.
 - Se agregó `tzdata` como dependencia directa (Item 072): `zoneinfo` la necesita para `scheduler.timezone`/cron cuando el SO no trae la base IANA (contenedores Linux mínimos y Windows); con datos del SO actúa solo como fallback.
 - Se mantiene `requires-python >= 3.14`.
+- **Windows: usar una 3.14 final, no la alpha gestionada de uv.** El registro
+  gestionado de uv solo ofrece `cpython-3.14.0a6` (alpha) para Windows: es
+  previa a la sintaxis PEP 758 y su ABI no es compatible con los wheels
+  `cp314` finales de las dependencias (`cffi`/`pycryptodomex` mueren con
+  `TypeError: bad argument type for built-in operation`), así que aunque el
+  entorno se instale, `odin` no corre. Instalar Python 3.14 final (`winget
+  install Python.Python.3.14` o el instalador de python.org) y crear el
+  entorno con `uv tool install --python <ruta>\python.exe …` (o `uv sync
+  --python <ruta>\python.exe`); verificar con `python --version` que no tenga
+  sufijo `a`.
 - La confirmación runtime en Windows Server queda delegada al job `windows`
   de la CI (Items 073/074; ver [`docs/service.md` §9](docs/service.md#9-evidencia-de-verificación-item-074)).
 
