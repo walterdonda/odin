@@ -27,6 +27,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import subprocess
 import sys
 import time
 from collections.abc import Callable
@@ -130,6 +131,36 @@ def _run_service(*args: str) -> int:
     return main(["service", *args])
 
 
+def _dump_start_failure(
+    config_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Vuelca diagnóstico útil cuando el SCM no logra arrancar el servicio."""
+    captured = capsys.readouterr()
+    print("--- salida de 'odin service start' ---")
+    print(captured.out)
+    print(captured.err, file=sys.stderr)
+    config = load_config(config_path)
+    log_path = config.local.resolved_log_dir / "odin.log"
+    if log_path.is_file():
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        print(f"--- {log_path} (últimas {min(len(lines), 40)} líneas) ---")
+        print("\n".join(lines[-40:]))
+    else:
+        print(f"--- sin log del servicio en {log_path} ---")
+    for label, directory in (
+        ("exec_prefix", sys.exec_prefix),
+        ("base_prefix", sys.base_prefix),
+    ):
+        path = Path(directory)
+        dlls = sorted(item.name for item in path.glob("*.dll"))
+        print(f"{label}={directory} dlls={dlls}")
+    query = subprocess.run(
+        ["sc.exe", "query", "odin"], capture_output=True, text=True, timeout=30
+    )
+    print("--- sc query odin ---")
+    print(query.stdout or query.stderr)
+
+
 def test_windows_service_smoke_lifecycle(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -148,7 +179,10 @@ def test_windows_service_smoke_lifecycle(
         assert "reinicio ante caída activado" in install_out
         assert str(config_path) in install_out
 
-        assert _run_service("start") == EXIT_OK
+        start_code = _run_service("start")
+        if start_code != EXIT_OK:
+            _dump_start_failure(config_path, capsys)
+        assert start_code == EXIT_OK
         assert "arrancado" in capsys.readouterr().out
 
         _wait_until(

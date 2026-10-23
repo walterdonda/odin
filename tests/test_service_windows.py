@@ -132,6 +132,7 @@ class FakeWin32:
         self.stop_error: FakeWindowsError | None = None
         self.status_error: FakeWindowsError | None = None
         self.config_error: FakeWindowsError | None = None
+        self.host_exe: Path | None = None
 
     # --- win32serviceutil ---
 
@@ -170,6 +171,12 @@ class FakeWin32:
             return self.statuses.pop(0)
         return self.statuses[0]
 
+    def locate_python_service_exe(self) -> str:
+        """Ruta del host del servicio (en producción lo copia pywin32)."""
+        if self.host_exe is not None:
+            return str(self.host_exe)
+        return str(Path(sys.exec_prefix) / "pythonservice.exe")
+
     # --- win32service ---
 
     def open_sc_manager(self, machine: Any, database: Any, access: int) -> str:
@@ -207,6 +214,7 @@ class FakeWin32:
             StartService=fake.start_service,
             StopService=fake.stop_service,
             QueryServiceStatus=fake.query_status,
+            LocatePythonServiceExe=fake.locate_python_service_exe,
         )
         win32service = SimpleNamespace(
             SERVICE_STOPPED=fake.SERVICE_STOPPED,
@@ -272,6 +280,31 @@ def _service_instance(fake: FakeWin32) -> Any:
 def test_windows_module_import_does_not_build_the_service_class() -> None:
     assert "odin.service.windows" in sys.modules
     assert windows_module._odin_service_class is None
+
+
+def test_install_copies_dlls_next_to_host_for_venv(
+    fake: FakeWin32, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Un venv no tiene las DLL en su raíz: install las deja junto al host."""
+    base = tmp_path / "base"
+    host_dir = tmp_path / "venv"
+    base.mkdir()
+    host_dir.mkdir()
+    major, minor = sys.version_info[:2]
+    names = (
+        f"python{major}{minor}.dll",
+        f"pywintypes{major}{minor}.dll",
+        "vcruntime140.dll",
+        "vcruntime140_1.dll",
+    )
+    for name in names:
+        (base / name).write_bytes(b"dll")
+    fake.host_exe = host_dir / "pythonservice.exe"
+    monkeypatch.setattr(sys, "base_prefix", str(base))
+
+    _manager(fake).install(_spec())
+
+    assert sorted(path.name for path in host_dir.iterdir()) == sorted(names)
 
 
 @pytest.mark.skipif(PYWIN32_AVAILABLE, reason="pywin32 instalado: el error de plataforma no aplica")

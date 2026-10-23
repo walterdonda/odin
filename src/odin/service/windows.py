@@ -43,6 +43,8 @@ from __future__ import annotations
 import contextlib
 import importlib
 import os
+import shutil
+import sys
 import threading
 import time
 from collections.abc import Callable, Sequence
@@ -134,6 +136,36 @@ def _build_runtime(config_path: Path) -> ServiceRuntime:
             "instalación de ODIN incompleta"
         )
     return cast(ServiceRuntime, factory(config_path))
+
+
+def _prepare_service_host_dlls(modules: Win32Modules) -> Path:
+    """Deja junto a ``pythonservice.exe`` las DLL que su loader necesita.
+
+    ``LocatePythonServiceExe`` copia el host a ``sys.exec_prefix`` y las DLL de
+    pywin32 junto a la DLL de Python, pero en un venv la raíz del prefijo no
+    contiene ``pythonXY.dll`` (el ``python.exe`` del venv es un launcher). El
+    loader de Windows resuelve los imports estáticos antes de que corra
+    ``site.py``, así que el SCM termina el arranque con el error 1053 si faltan.
+    Se copian desde la instalación base las DLL disponibles; si ya están junto
+    al host, no se toca nada.
+    """
+    locate = getattr(modules.win32serviceutil, "LocatePythonServiceExe", None)
+    host = Path(locate()) if locate is not None else Path(sys.exec_prefix) / "pythonservice.exe"
+    major, minor = sys.version_info[:2]
+    names = (
+        f"python{major}{minor}.dll",
+        f"pywintypes{major}{minor}.dll",
+        "vcruntime140.dll",
+        "vcruntime140_1.dll",
+    )
+    source_dir = Path(sys.base_prefix)
+    target_dir = host.parent
+    for name in names:
+        source = source_dir / name
+        target = target_dir / name
+        if source.is_file() and not target.exists():
+            shutil.copy2(source, target)
+    return host
 
 
 def _is_winerror(modules: Win32Modules, exc: BaseException, name: str) -> bool:
@@ -372,7 +404,13 @@ class WindowsServiceManager(ServiceManager):
     # --- ciclo de vida ---
 
     def install(self, spec: ServiceSpec) -> str:
-        """Instala el servicio con arranque automático, config fija y reinicio."""
+        """Instala el servicio con arranque automático, config fija y reinicio.
+
+        Antes de registrar el servicio se aseguran junto al host las DLL que
+        ``pythonservice.exe`` resuelve al cargar (ver
+        ``_prepare_service_host_dlls``): un venv no las tiene en su raíz y el
+        SCM fallaría el arranque con el error 1053.
+        """
         modules = _import_win32()
         start_type = (
             modules.win32service.SERVICE_AUTO_START
@@ -380,6 +418,7 @@ class WindowsServiceManager(ServiceManager):
             else modules.win32service.SERVICE_DEMAND_START
         )
         try:
+            _prepare_service_host_dlls(modules)
             modules.win32serviceutil.InstallService(
                 SERVICE_CLASS_STRING,
                 spec.name,
