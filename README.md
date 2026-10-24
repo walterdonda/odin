@@ -13,6 +13,7 @@ compresión 7z, transferencia SFTP (paramiko) y notificación por correo.
   - [Modo desarrollo](#modo-desarrollo)
 - [Configuración](#configuración)
   - [Bloques del JSON](#bloques-del-json)
+  - [Referencia detallada de campos](docs/configuration.md)
   - [Tabla resumen de campos y defaults](#tabla-resumen-de-campos-y-defaults)
   - [Ejemplos](#ejemplos)
   - [Validación de configuración](#validación-de-configuración)
@@ -110,8 +111,10 @@ credenciales en texto legible: restringí sus permisos y no la versiones (ver
 
 ### Bloques del JSON
 
-Referencia rápida por bloque; los ejemplos completos están en
-[`examples/`](examples/) y cada campo se valida al cargar la configuración.
+Referencia rápida por bloque; la referencia completa —tipo, obligatoriedad,
+default, rangos, reglas cruzadas y límites de la versión— está en
+[`docs/configuration.md`](docs/configuration.md). Los ejemplos completos están
+en [`examples/`](examples/) y cada campo se valida al cargar la configuración.
 
 - **`databases[]`** — una entrada por base Firebird. `name` es la clave
   estable que referencian los jobs del scheduler; `connection` se pasa a
@@ -125,8 +128,8 @@ Referencia rápida por bloque; los ejemplos completos están en
   opcional, `~` permitido).
 - **`notification`** — casilla destino/remitente y transporte SMTP
   (`starttls` por defecto; `smtp.ssl` para SSL implícito).
-- **`local`** — directorios de trabajo y logs, nivel de logging, umbral de
-  espacio libre y defaults operativos (timeouts y reintentos).
+- **`local`** — directorios de trabajo y logs, nivel de logging, retención,
+  umbral de espacio libre y timeout por defecto de `gbak`.
 - **`scheduler`** — jobs cron por subconjunto de bases;
 
   ```json
@@ -163,14 +166,14 @@ Referencia rápida por bloque; los ejemplos completos están en
 | `servers[].name` | — (requerido) | Identificador del destino en el informe. |
 | `servers[].host` / `.port` | — (requeridos) | Servidor SFTP. |
 | `servers[].username` | — (requerido) | Usuario SFTP. |
-| `servers[].auth.method` | `password` | `password` o `key`. |
+| `servers[].auth.method` | — (requerido) | `password` o `key`. |
 | `servers[].auth.password` | `null` | Contraseña SFTP cuando `method: password`. |
 | `servers[].auth.private_key` / `.passphrase` | `null` | Clave privada (y passphrase) cuando `method: key`; `~` se expande. |
 | `servers[].remote_path` | — (requerido) | Directorio remoto destino; se crea si no existe. |
 | `servers[].host_key_policy` | `strict` | `strict`, `known_hosts`, `accept-new` o `insecure` (ver [Seguridad](#seguridad)). |
-| `servers[].sftp_retries` | `3` | Reintentos de conexión/operación. |
+| `servers[].sftp_retries` | `3` | Intentos totales por conexión y subida (no reintentos adicionales); mínimo efectivo `1`. |
 | `servers[].sftp_connect_timeout_sec` | `30` | Timeout de conexión SSH. |
-| `servers[].sftp_operation_timeout_sec` | `60` | Timeout por operación SFTP. |
+| `servers[].sftp_operation_timeout_sec` | `60` | Aceptado; sin efecto en 1.0.0 (ver [referencia](docs/configuration.md#11-notas-de-implementación-y-límites-conocidos)). |
 | `servers[].sftp_retry_backoff_base` | `2.0` | Base del backoff exponencial entre reintentos (segundos). |
 | `servers[].sftp_retry_max_delay_sec` | `30.0` | Tope del backoff (segundos). |
 | `notification.to` / `.from` | — (requeridos) | Casilla de control y remitente del informe. |
@@ -178,21 +181,25 @@ Referencia rápida por bloque; los ejemplos completos están en
 | `notification.smtp.host` / `.port` | — (requeridos) | Servidor SMTP. |
 | `notification.smtp.starttls` | `true` | Negocia STARTTLS antes de autenticar; `false` envía en plano (relays locales). |
 | `notification.smtp.ssl` | `false` | SSL implícito (típicamente puerto 465); mutuamente excluyente con `starttls: true`. |
-| `notification.smtp.username` / `.password` | `""` | Autenticación SMTP; vacíos omiten el `AUTH`. |
+| `notification.smtp.username` / `.password` | — (requeridos en 1.0.0) | Credenciales SMTP; con `username` no vacío se hace `AUTH`. |
 | `local.work_dir` | — (requerido) | Directorio de artefactos y estado; se autocrea. |
 | `local.retention_days` | — (requerido) | `0` deshabilita la limpieza; `N > 0` elimina copias gestionadas de más de `N` días. |
-| `local.log_level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` o `CRITICAL`. |
+| `local.log_level` | `INFO` | `DEBUG`, `INFO`, `WARNING` o `ERROR`. |
 | `local.log_dir` | `null` → `<work_dir>/logs` | Directorio del `odin.log`. |
-| `local.min_free_mb` | `1024` | Espacio libre mínimo exigido en `work_dir` por `validate`. |
+| `local.min_free_mb` | `1024` | Espacio libre mínimo comprobado por `odin validate` en `work_dir`; no bloquea `odin run`. |
 | `local.gbak_timeout_sec` | `7200` | Timeout por defecto del respaldo. |
-| `local.sftp_retries` | `3` | Reintentos SFTP por defecto (si el servidor no los define). |
-| `local.sftp_connect_timeout_sec` | `30` | Timeout de conexión SFTP por defecto (si el servidor no lo define). |
+| `local.sftp_retries` | `3` | Aceptado; sin efecto en 1.0.0. Cada servidor usa su propio `sftp_retries` (default `3`). |
+| `local.sftp_connect_timeout_sec` | `30` | Aceptado; sin efecto en 1.0.0. Cada servidor usa su propio `sftp_connect_timeout_sec` (default `30`). |
 | `scheduler.enabled` | `false` | Habilita el scheduler interno; `odin service run` exige `true`. |
 | `scheduler.timezone` | `"UTC"` | Zona IANA que interpreta los `schedule` y los `next_fire_time`. |
 | `scheduler.jobs[].databases` | — (requerido) | Bases del job (validadas contra `databases`). |
 | `scheduler.jobs[].schedule` | — (requerido) | Cron de 5 campos (minuto, hora, día del mes, mes, día de la semana). |
 | `scheduler.jobs[].skip_if_running` | `true` | `true`: omite el ciclo si alguna base está ocupada; `false`: corre solo con las libres. |
 | `scheduler.jobs[].on_misfire` | `run_once` | `run_once`: recupera el disparo vencido; `skip`: lo descarta. |
+
+Los campos marcados como *aceptado sin efecto* se validan pero la versión
+1.0.0 no los aplica; el detalle de cada límite está en
+[`docs/configuration.md`](docs/configuration.md#11-notas-de-implementación-y-límites-conocidos).
 
 ### Ejemplos
 
@@ -588,7 +595,7 @@ archivo**, para no depender de una terminal.
 |---|---|
 | Archivo | `<resolved_log_dir>/odin.log` = `local.log_dir` o, si es `null`, `<work_dir>/logs/odin.log`. |
 | Rotación | 5 MiB por archivo con 5 backups (`odin.log.1` … `odin.log.5`). |
-| Nivel | `local.log_level`: `DEBUG`, `INFO`, `WARNING`, `ERROR` o `CRITICAL` (default `INFO`). |
+| Nivel | `local.log_level`: `DEBUG`, `INFO`, `WARNING` o `ERROR` (default `INFO`). |
 | Enmascarado | Contraseñas, passphrases y contenido de claves privadas se sustituyen por `***` antes de escribir a consola, archivo, correo y estado. |
 | Cola del informe | `notification.log_tail_lines` (default `50`) anexa al correo las últimas líneas del log, ya enmascaradas; `0` la desactiva. |
 

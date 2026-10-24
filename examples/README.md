@@ -5,6 +5,10 @@ adaptar. Reproducen el contrato OS-agnóstico de la visión del proyecto
 (`docs/aide/vision.md` §5): el **mismo esquema** en ambas plataformas, solo
 cambian los valores de rutas.
 
+La referencia completa de todos los campos —tipo, obligatoriedad, default,
+rangos, reglas cruzadas y límites de la versión— está en
+[`docs/configuration.md`](../docs/configuration.md).
+
 | Archivo | Plataforma | `connection` | `local.work_dir` |
 |---|---|---|---|
 | [`config.linux.json`](config.linux.json) | Linux LTS | `localhost/3050:/var/lib/firebird/data/erp.fdb` | `/var/backups/odin` |
@@ -78,21 +82,27 @@ confiabilidad/observabilidad, con sus valores por defecto:
 |---|---|---|---|
 | `databases[]` | `gbak_timeout_sec` | `null` | Timeout por base; si es `null`, usa `local.gbak_timeout_sec`. |
 | `servers[]` | `host_key_policy` | `"strict"` | Política de host keys SSH: `strict`, `known_hosts`, `accept-new`, `insecure`. |
+| `servers[]` | `sftp_retries` | `3` | Intentos totales por conexión y subida (no reintentos adicionales); mínimo efectivo `1`. |
+| `servers[]` | `sftp_connect_timeout_sec` | `30` | Timeout de conexión SSH (segundos). |
+| `servers[]` | `sftp_operation_timeout_sec` | `60` | Aceptado; sin efecto en 1.0.0. |
+| `servers[]` | `sftp_retry_backoff_base` | `2.0` | Base del backoff exponencial entre intentos (segundos). |
+| `servers[]` | `sftp_retry_max_delay_sec` | `30.0` | Tope del backoff (segundos). |
 | `notification` | `log_tail_lines` | `50` | Líneas finales del log adjuntas al correo de ejecución. |
 | `notification.smtp` | `ssl` | `false` | SSL implícito (típicamente puerto 465); exige `starttls: false`. |
 | `local` | `log_level` | `"INFO"` | Nivel de logging: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
 | `local` | `log_dir` | `null` | Directorio de logs; si es `null`, se usa `<work_dir>/logs`. |
-| `local` | `min_free_mb` | `1024` | Espacio libre mínimo exigido en `work_dir` antes de respaldar. |
+| `local` | `min_free_mb` | `1024` | Espacio libre mínimo comprobado por `odin validate` en `work_dir`; no bloquea `odin run`. |
 | `local` | `gbak_timeout_sec` | `7200` | Timeout global de `gbak` (segundos). |
-| `local` | `sftp_retries` | `3` | Reintentos de transferencia SFTP ante fallos transitorios. |
-| `local` | `sftp_connect_timeout_sec` | `30` | Timeout de conexión SFTP (segundos). |
+| `local` | `sftp_retries` | `3` | Aceptado; sin efecto en 1.0.0. Cada servidor usa su propio `sftp_retries` (default `3`). |
+| `local` | `sftp_connect_timeout_sec` | `30` | Aceptado; sin efecto en 1.0.0. Cada servidor usa su propio `sftp_connect_timeout_sec` (default `30`). |
 
 `compression.password` (mostrado como `null`) habilita el cifrado **AES-256**
 del `.7z` cuando se le asigna un valor (Etapa 3).
 
-> Estos campos se consumen en las etapas implementadas: `odin run` usa respaldo,
-> compresión, transferencia, correo (Etapa 5) y retención local, y `odin
-> validate` verifica tipo/rango de todos —incluidos los del scheduler (Etapa 6,
-> aún sin ejecutor)—. El `charset` se conserva en el contrato pero no se pasa a
-> `gbak` (no tiene switch de charset; el respaldo transportable no depende del
-> charset de conexión).
+> La semántica completa y los límites conocidos de la versión están en
+> [`docs/configuration.md`](../docs/configuration.md). Los campos marcados
+> *sin efecto en 1.0.0* se validan pero todavía no se aplican. `odin run` usa
+> respaldo, compresión, transferencia, correo y retención local; el scheduler
+> se ejecuta con `odin service run`. El `charset` se conserva en el contrato
+> pero no se pasa a `gbak` (no tiene switch de charset; el respaldo
+> transportable no depende del charset de conexión).

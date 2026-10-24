@@ -11,8 +11,9 @@ el host, la configuración y las cuentas con las que corre el pipeline.
 - Checklist y rotación: [`§8`](#8-checklist-de-despliegue-seguro) y [`§9`](#9-rotación-de-credenciales).
 
 Documentación relacionada: [`README.md`](../README.md),
-[`docs/service.md`](service.md) (cuenta del servicio y permisos de rutas) y
-[`examples/README.md`](../examples/README.md).
+[`docs/configuration.md`](configuration.md) (campos, defaults y límites de la
+configuración), [`docs/service.md`](service.md) (cuenta del servicio y permisos
+de rutas) y [`examples/README.md`](../examples/README.md).
 
 ---
 

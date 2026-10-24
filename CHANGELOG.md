@@ -22,6 +22,13 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ### Documentación
 
+- Nueva referencia [`docs/configuration.md`](docs/configuration.md): todos los
+  campos del JSON (tipo, obligatoriedad, default, rangos, reglas cruzadas,
+  ejemplos y límites conocidos de la 1.0.0), enlazada desde el README,
+  `examples/README.md` y la guía de seguridad. En el resumen se corrigieron
+  `local.log_level` (sin `CRITICAL`), la semántica de `sftp_retries`, los
+  defaults de SMTP y el alcance real de los campos SFTP locales y de
+  `sftp_operation_timeout_sec`.
 - Nota de despliegue para Windows (README, troubleshooting y compatibilidad):
   instalar Python 3.14 **final** y no dejar que uv descargue la alpha
   `3.14.0a6` de su registro gestionado, previa a PEP 758 y con ABI incompatible
