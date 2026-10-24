@@ -27,6 +27,18 @@ from odin.compress import (
 
 PAYLOAD = (b"ODIN backup payload " * 4096) + bytes(range(256))
 PASSWORD = "clave-de-prueba"
+# py7zr cifra con un IV aleatorio por archivo, así que la basura que produce
+# una clave incorrecta varía: el flujo LZMA2 puede ser inválido
+# (``lzma.LZMAError``) o terminar antes de tiempo y recibir más datos
+# (``EOFError``). ``ArchiveError`` cubre además un CRC que no cuadre.
+WRONG_PASSWORD_ERRORS = (lzma.LZMAError, EOFError, py7zr.exceptions.ArchiveError)
+# IV fijos que reproducen ambos fallos de forma determinista: con IV aleatorio
+# el caso es inestable e incluso puede dejar al extractor de py7zr en un bucle
+# sin progreso.
+WRONG_PASSWORD_IVS = (
+    pytest.param(b"\x00" * 16, id="lzma-error"),
+    pytest.param(b"\xff" * 16, id="eof-error"),
+)
 
 
 def _extract(archive: Path, destination: Path, password: str | None = None) -> None:
@@ -191,12 +203,27 @@ def test_encrypted_archive_requires_password(source_file: Path, tmp_path: Path) 
         _extract(result.archive_path, tmp_path / "sin_clave")
 
 
-def test_encrypted_archive_wrong_password_fails(source_file: Path, tmp_path: Path) -> None:
+@pytest.mark.parametrize("iv", WRONG_PASSWORD_IVS)
+def test_encrypted_archive_wrong_password_fails(
+    source_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, iv: bytes
+) -> None:
+    # Se fija el IV para que el fallo no dependa de bytes aleatorios: uno de
+    # los casos reproduce el ``EOFError`` observado en CI y el otro el
+    # ``lzma.LZMAError`` habitual.
+    monkeypatch.setattr("py7zr.compressor.get_random_bytes", lambda size, iv=iv: iv)
+
     result = compress_backup("erp_principal", source_file, password=PASSWORD)
     assert result.archive_path is not None
+    destination = tmp_path / "clave_incorrecta"
 
-    with pytest.raises(lzma.LZMAError):
-        _extract(result.archive_path, tmp_path / "clave_incorrecta", "otra-clave")
+    with pytest.raises(WRONG_PASSWORD_ERRORS):
+        _extract(result.archive_path, destination, "otra-clave")
+
+    # La extracción fallida puede dejar un archivo parcial, pero nunca el
+    # contenido original.
+    assert not any(
+        path.is_file() and path.read_bytes() == PAYLOAD for path in destination.rglob("*")
+    )
 
 
 # --- logging y enmascarado de secretos (Item 027) ---
