@@ -9,6 +9,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ### Corregido
 
+- **CI (Linux)**: `test_encrypted_archive_wrong_password_fails` era inestable.
+  py7zr cifra cada archivo con un IV aleatorio y, al descifrar con una clave
+  incorrecta, el flujo LZMA2 resultante falla indistintamente con
+  `lzma.LZMAError` (flujo corrupto) o `EOFError: Already at end of stream`
+  (flujo terminado antes de tiempo); con IV aleatorio py7zr puede incluso no
+  progresar y dejar el test colgado. Antes solo se aceptaba `LZMAError`; ahora
+  el test fija el IV, cubre ambos fallos de forma determinista (más
+  `py7zr.exceptions.ArchiveError` para un CRC que no cuadre) y comprueba que el
+  contenido original no se recupera.
 - **Windows**: `SyntaxError: multiple exception types must be parenthesized` al
   importar con builds de Python 3.14 previas a la final (la `3.14.0a6` que
   gestiona uv en Windows): el `except` de `_parse_scheduler` (`config.py`)

@@ -22,8 +22,10 @@ Responsabilidades:
   ``py7zr`` aplica 7zAES (AES-256) al contenido. Decisión: **no** se cifra la
   cabecera (``header_encryption=False``); el cifrado de cabecera de py7zr
   1.1.3 falla con ``TypeError`` ilegible ante contraseña incorrecta, mientras
-  que el cifrado solo de contenido falla de forma estable con
-  ``lzma.LZMAError``. La contraseña nunca se registra ni viaja en mensajes.
+  que el cifrado solo de contenido produce un error de descompresión legible
+  (``lzma.LZMAError`` o ``EOFError`` según el IV aleatorio del archivo) en
+  lugar de contenido válido. La contraseña nunca se registra ni viaja en
+  mensajes.
   En py7zr 1.1.3 el filtro AES solo se inyecta automáticamente cuando
   ``filters`` es ``None``; como acá se pasan filtros explícitos de nivel, el
   filtro ``FILTER_CRYPTO_AES256_SHA256`` se agrega a mano tras el de
@@ -274,8 +276,9 @@ def _write_archive(
     """Escribe el ``.7z`` en ``target`` (cifrado con 7zAES si hay ``password``).
 
     No se cifra la cabecera del archivo (ver docstring del módulo): el cifrado
-    solo de contenido tiene un modo de fallo estable y legible ante
-    contraseña incorrecta.
+    solo de contenido produce un error de descompresión legible ante una
+    contraseña incorrecta (``lzma.LZMAError``/``EOFError``), sin el
+    ``TypeError`` interno que produce la cabecera cifrada.
     """
     with py7zr.SevenZipFile(target, "w", filters=filters, password=password) as archive:
         archive.write(source, arcname=source.name)

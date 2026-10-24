@@ -35,10 +35,14 @@ password; a wrong password fails; logs do not contain the secret.
 - **Cifrado habilitado, con `header_encryption=False`**: se verificó en
   `py7zr` 1.1.3 que el cifrado de contenido (7zAES/AES-256) funciona estable;
   en cambio, con cabecera cifrada una contraseña incorrecta falla con
-  `TypeError: Unknown field: b'...'` (error interno ilegible), mientras que
-  con cabecera en claro falla siempre con `lzma.LZMAError: Corrupt input
-  data`, que es interpretable y estable para cualquier contraseña. Se prioriza
-  el modo de fallo legible; el nombre de archivo no es un secreto.
+  `TypeError: Unknown field: b'...'` (error interno ilegible). Con cabecera en
+  claro la extracción tampoco devuelve el contenido, pero el error depende del
+  IV aleatorio que py7zr usa por archivo: el flujo LZMA2 descifrado con la
+  clave incorrecta puede ser inválido (`lzma.LZMAError`), terminar antes de lo
+  esperado (`EOFError: Already at end of stream`) o, en casos raros, dejar al
+  extractor de py7zr en un bucle sin progreso. Los dos primeros son
+  interpretables y por eso el test fija el IV en lugar de depender del azar;
+  el nombre de archivo no es un secreto.
 - **Filtro AES explícito (trampa de py7zr 1.1.3)**: `_prepare_write` solo
   inyecta `DEFAULT_FILTERS.ENCRYPTED_ARCHIVE_FILTER` cuando `password` está
   definido **y `filters is None`**. Como ODIN pasa filtros explícitos para el
@@ -67,7 +71,7 @@ password; a wrong password fails; logs do not contain the secret.
 - [x] Build succeeds — `uv sync`.
 - [x] Tests pass — `uv run pytest tests/test_compress.py`: **24 passed in 2.87 s**.
 - [x] **Application runs**: `compress_backup(..., password="...")` sobre un `.fbk` real.
-- [x] **Feature verified**: el `.7z` solo se extrae con la contraseña correcta; sin clave lanza `PasswordRequired` y con clave incorrecta `lzma.LZMAError`.
+- [x] **Feature verified**: el `.7z` solo se extrae con la contraseña correcta; sin clave lanza `PasswordRequired` y con clave incorrecta un error de descompresión (`lzma.LZMAError` o `EOFError`, según el IV aleatorio del archivo).
 - [x] **Data verified**: los bytes extraídos coinciden con el origen; `encrypted` es `True` solo con contraseña.
 
 **Expected Outcomes**

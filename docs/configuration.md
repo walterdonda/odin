@@ -216,7 +216,9 @@ El bloque es opcional. Si se omite, se usan `level: 7` y `password: null`.
   publica con `os.replace` solo después de validarlo. Una compresión fallida
   no reemplaza una copia anterior.
 - El cifrado es **solo del contenido**: no se cifra la cabecera del 7z. Con
-  contraseña incorrecta, la lectura falla de forma estable.
+  contraseña incorrecta el contenido no se recupera: py7zr falla al descifrar
+  (habitualmente `lzma.LZMAError` o `EOFError`) en lugar de devolver los bytes
+  originales.
 - Nivel `0` no desactiva la creación del `.7z`: genera un archivo 7z en modo
   *store* (sin compresión), no un `.fbk` sin empaquetar.
 - La salida se nombra `<name>_<timestamp>.fbk.7z`.
