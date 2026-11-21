@@ -16,3 +16,4 @@ Resolver con el humano:
 - `validate.py`: checks estáticos por motor y coherencia de campos (los mensajes exactos salen del ticket 02).
 - Matriz de tests: unitarios espejo (finder, config, backup por motor) y `PostgresContainer` espejo de `tests/firebird_container.py` + CI.
 - Detalles del engine PostgreSQL que dependen de los datos del ticket 01 (comando exacto, patrones de error, finder).
+- Decisión `--encoding` del dump: default (encoding de la base) vs forzar UTF8 — el trap `SQL_ASCII` (dump rotulado UTF8 con bytes crudos, sin conversión) está documentado en 01.

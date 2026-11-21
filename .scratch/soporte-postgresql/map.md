@@ -27,13 +27,12 @@ Especificación aprobada y plan de implementación para incorporar **PostgreSQL 
 
 <!-- una línea por ticket cerrado: título con link y gist; el detalle vive en el ticket -->
 
+- [Datos duros de pg_dump para PostgreSQL 18](issues/01-pg-dump-datos-duros.md): flags, exit codes, patrones de error, semántica de `PGPASSWORD` y rutas de pg_dump 18 verificados contra docs oficiales; notas en rama `research/pg-dump-18`; decisión nueva `--encoding` (UTF8 vs default, trap `SQL_ASCII`) derivada al 03.
+
 ## Not yet specified
 
 <!-- niebla en alcance que aún no es ticket: se gradúa cuando el frontier avanza -->
 
-- Construcción exacta del comando `pg_dump` (flags de conexión, `--encoding`, orden de argumentos) → datos del ticket 01, especificación en 03.
-- Patrones de error de `pg_dump` para detectar fallos (equivalente de `_ERROR_PATTERNS` del engine nuevo) → 01 → 03.
-- Rutas típicas de `pg_dump` 18 por SO para el finder → 01 → 03.
 - Campos/defaults/mensajes de validación exactos de `databases[]` y `local` → ticket 02.
 - Semántica y default de `local.pg_dump_timeout_sec` → 02.
 - Matriz de tests unitarios y de integración por motor → 03.
