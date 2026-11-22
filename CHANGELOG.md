@@ -31,6 +31,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ### Documentación
 
+- Nueva [`docs/postgresql.md`](docs/postgresql.md): **especificación y plan de
+  implementación del soporte PostgreSQL 18+** (segundo motor con `pg_dump`,
+  formato custom `.dump`, contrato de configuración con `type` explícito y
+  obligatorio, seam `odin/engines/`, finder `pg_dump`, tests y CI), aprobados
+  en el mapa wayfinder `soporte-postgresql`. La implementación es posterior al
+  documento: hasta que aterrice, los campos PostgreSQL documentados no son
+  aceptados por el parser (nota de alcance en
+  [`docs/configuration.md`](docs/configuration.md) y el README).
 - Nueva referencia [`docs/configuration.md`](docs/configuration.md): todos los
   campos del JSON (tipo, obligatoriedad, default, rangos, reglas cruzadas,
   ejemplos y límites conocidos de la 1.0.0), enlazada desde el README,

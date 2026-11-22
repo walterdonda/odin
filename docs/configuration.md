@@ -9,6 +9,7 @@ comportamiento de consumo corresponde a la versión **1.0.0**.
 - Ejemplos listos para copiar: [`examples/`](../examples/).
 - Permisos, claves SSH y host keys: [`docs/security.md`](security.md).
 - Resolución de `gbak` por versión: [`docs/firebird.md`](firebird.md).
+- Especificación y plan del soporte PostgreSQL: [`docs/postgresql.md`](postgresql.md).
 - Scheduler y servicio residente: [`docs/service.md`](service.md).
 
 > **Nota de alcance:** esta referencia describe lo que el código hace hoy,
@@ -16,6 +17,13 @@ comportamiento de consumo corresponde a la versión **1.0.0**.
 > marcados como *aceptado sin efecto* se validan al cargar, pero todavía no
 > influyen en la ejecución; el detalle está en
 > [§11](#11-notas-de-implementación-y-límites-conocidos).
+
+> **Soporte PostgreSQL (especificación aprobada, implementación pendiente):**
+> los campos `type`, `host`, `port`, `dbname`, `pg_dump_path` y
+> `pg_dump_timeout_sec` descritos en esta guía corresponden a la especificación
+> aprobada en [`docs/postgresql.md`](postgresql.md) (mapa wayfinder
+> `soporte-postgresql`) y **entran en vigor con su implementación**: el parser
+> de la 1.0.0 todavía los rechaza como campos desconocidos.
 
 ---
 
@@ -142,7 +150,7 @@ admite):
 
 | Bloque | Obligatorio | Contenido |
 |---|---|---|
-| `databases` | Sí | Bases Firebird a respaldar. |
+| `databases` | Sí | Bases a respaldar: Firebird o PostgreSQL, según el `type` de cada entrada. |
 | `compression` | No | Nivel de 7z y cifrado opcional. |
 | `servers` | Sí | Destinos SFTP; puede estar vacío. |
 | `notification` | Sí | Casillas y transporte SMTP del informe. |
@@ -153,34 +161,52 @@ admite):
 
 ## 3. `databases[]`
 
-Cada elemento describe una base Firebird. `odin run` recorre **todas** las
-bases de la lista; los jobs del scheduler eligen subconjuntos por `name`.
+Cada elemento describe una base a respaldar. El campo `type` elige el motor y
+determina qué campos aplican: Firebird (`gbak`) o PostgreSQL (`pg_dump`).
+`odin run` recorre **todas** las bases de la lista; los jobs del scheduler
+eligen subconjuntos por `name`.
 
-| Campo | Tipo | Obligatorio | Default | Reglas y efecto |
-|---|---|---|---|---|
-| `name` | `string` | Sí | — | No vacío; único en `databases[]`. Es la clave que referencian los jobs y el prefijo del archivo de respaldo. |
-| `connection` | `string` | Sí | — | No vacío. Se pasa a `gbak` **tal cual**; el formato depende del SO donde reside la base, no del host de ODIN. |
-| `user` | `string` | Sí | — | No vacío. Se pasa como `-user`. |
-| `password` | `string` | Sí | — | No vacío. Se pasa como `-password` y se enmascara en logs e informes. |
-| `role` | `string \| null` | No | `null` | Si es un texto no vacío, se pasa como `-role`; si es `null`, no se agrega el switch. |
-| `charset` | `string \| null` | No | `null` | Se conserva en el modelo, pero **no se pasa a `gbak`**: la herramienta no tiene switch de charset y el respaldo transportable no depende del charset de conexión. |
-| `gbak_path` | `string \| null` | No | `null` | Ruta local al ejecutable `gbak`; acepta `~` y rutas relativas al JSON. `null` delega la auto-detección por SO y versión (ver [`docs/firebird.md`](firebird.md)). |
-| `gbak_timeout_sec` | `integer \| null` | No | `null` | Entero `> 0`. Si es `null` o se omite, se usa `local.gbak_timeout_sec`. |
+| Campo | Tipo | Obligatorio | Default | Motor | Reglas y efecto |
+|---|---|---|---|---|---|
+| `type` | `string` | Sí | — | ambos | `"firebird"` o `"postgresql"`, sin default. Determina qué campos aplican y qué binario se usa. |
+| `name` | `string` | Sí | — | ambos | No vacío; único en `databases[]`. Es la clave que referencian los jobs y el prefijo del archivo de respaldo. |
+| `user` | `string` | Sí | — | ambos | No vacío. Se pasa como `-user` (gbak) o `--username` (pg_dump). |
+| `password` | `string` | Sí | — | ambos | No vacío. Se pasa como `-password` (gbak) o vía `PGPASSWORD` (pg_dump) y se enmascara en logs e informes. |
+| `connection` | `string` | Sí* | — | firebird | No vacío. Se pasa a `gbak` **tal cual**; el formato depende del SO donde reside la base, no del host de ODIN. `*` Requerido solo cuando `type` es `"firebird"`. |
+| `role` | `string \| null` | No | `null` | firebird | Si es un texto no vacío, se pasa como `-role`; si es `null`, no se agrega el switch. |
+| `charset` | `string \| null` | No | `null` | firebird | Se conserva en el modelo, pero **no se pasa a `gbak`**: la herramienta no tiene switch de charset y el respaldo transportable no depende del charset de conexión. |
+| `gbak_path` | `string \| null` | No | `null` | firebird | Ruta local al ejecutable `gbak`; acepta `~` y rutas relativas al JSON. `null` delega la auto-detección por SO y versión (ver [`docs/firebird.md`](firebird.md)). |
+| `gbak_timeout_sec` | `integer \| null` | No | `null` | firebird | Entero `> 0`. Si es `null` o se omite, se usa `local.gbak_timeout_sec`. |
+| `host` | `string` | Sí* | — | postgresql | No vacío. Hostname o IP del servidor; se pasa como `--host`. Sin default `localhost`. `*` Requerido solo cuando `type` es `"postgresql"`. |
+| `port` | `integer` | No | `5432` | postgresql | Entero entre `1` y `65535`. Se pasa como `--port`. |
+| `dbname` | `string` | Sí* | — | postgresql | No vacío. Nombre real de la base en el servidor (`--dbname`); **no** defaulta a `name`. `*` Requerido solo cuando `type` es `"postgresql"`. |
+| `pg_dump_path` | `string \| null` | No | `null` | postgresql | Ruta local al ejecutable `pg_dump`; acepta `~` y rutas relativas al JSON. `null` delega la auto-detección (ver [`docs/postgresql.md`](postgresql.md)). |
+| `pg_dump_timeout_sec` | `integer \| null` | No | `null` | postgresql | Entero `> 0`. Si es `null` o se omite, se usa `local.pg_dump_timeout_sec`. |
 
 ### Notas
 
+- **Campos por motor.** Un campo de un motor presente en una entrada del otro
+  es error (`"solo aplica cuando type es '…'"`); `connection` ausente con
+  `type: "firebird"` y `host`/`dbname` ausentes con `type: "postgresql"` son
+  error (`"es requerido cuando type es '…'"`). Ver [§9](#9-reglas-cruzadas).
 - **`name` y el nombre del archivo.** El respaldo se guarda como
-  `<name>_<YYYYMMDD_HHMMSS>.fbk` y el comprimido como el mismo nombre con
-  `.7z`. El parser no valida caracteres especiales: usá un identificador
-  simple, sin `/`, `\`, `:` ni otros separadores de ruta, para no crear
-  subdirectorios accidentales ni romper la retención (que solo reconoce el
-  patrón `<nombre>_<timestamp>.fbk[.7z]`).
+  `<name>_<YYYYMMDD_HHMMSS>.<ext>` —`.fbk` para Firebird, `.dump` para
+  PostgreSQL— y el comprimido como el mismo nombre con `.7z`. El parser no
+  valida caracteres especiales: usá un identificador simple, sin `/`, `\`, `:`
+  ni otros separadores de ruta, para no crear subdirectorios accidentales ni
+  romper la retención (que reconoce el patrón
+  `<nombre>_<timestamp>.(fbk|dump)[.7z]`).
 - **`connection`.** Ejemplos válidos:
   `localhost/3050:C:\Datos\ERP\erp.fdb` (base en Windows),
   `localhost/3050:/var/lib/firebird/data/erp.fdb` (base en Linux) o un alias
   de Firebird. La guía de Firebird cubre la regla de familia de `gbak`.
-- **Timeout.** La precedencia es `databases[].gbak_timeout_sec` y, si es
-  `null`, `local.gbak_timeout_sec`. El valor efectivo debe ser mayor que cero.
+- **PostgreSQL.** El dump es lógico por base (`pg_dump`, formato custom, solo
+  serie 18.0+); `dbname` es el nombre real de la base y `host`/`port` apuntan
+  al servidor. Detalle, restricciones y plan en
+  [`docs/postgresql.md`](postgresql.md).
+- **Timeout.** La precedencia es `databases[].*_timeout_sec` y, si es `null`,
+  el `local.*_timeout_sec` del motor. El valor efectivo debe ser mayor que
+  cero.
 - **`charset`.** Se mantiene por compatibilidad con el contrato de la visión,
   pero no interviene en la ejecución actual.
 - **`role`.** Si es `null`, no se envía. Un `""` no es válido: omitilo o usá
@@ -189,6 +215,7 @@ bases de la lista; los jobs del scheduler eligen subconjuntos por `name`.
 ```json
 {
   "name": "erp_principal",
+  "type": "firebird",
   "connection": "localhost/3050:C:\\Datos\\ERP\\erp.fdb",
   "user": "SYSDBA",
   "password": "***",
@@ -196,6 +223,20 @@ bases de la lista; los jobs del scheduler eligen subconjuntos por `name`.
   "charset": "ISO8859_1",
   "gbak_path": null,
   "gbak_timeout_sec": 3600
+}
+```
+
+```json
+{
+  "name": "ventas_pg",
+  "type": "postgresql",
+  "host": "db.example.com",
+  "port": 5432,
+  "dbname": "ventas",
+  "user": "odin_backup",
+  "password": "***",
+  "pg_dump_path": null,
+  "pg_dump_timeout_sec": null
 }
 ```
 
@@ -412,7 +453,8 @@ están en [`docs/security.md`](security.md#4-políticas-de-host-key).
 | `log_level` | `string` | No | `"INFO"` | `DEBUG`, `INFO`, `WARNING` o `ERROR`. Controla el archivo y la consola. |
 | `log_dir` | `string \| null` | No | `null` | Directorio del `odin.log`. Si es `null` o se omite, se usa `<work_dir>/logs`. |
 | `min_free_mb` | `integer` | No | `1024` | Entero `>= 0`. Espacio libre mínimo que **comprueba `odin validate`**; no bloquea `odin run`. |
-| `gbak_timeout_sec` | `integer` | No | `7200` | Entero `> 0`. Timeout por defecto de cada respaldo cuando la base no define `gbak_timeout_sec`. |
+| `gbak_timeout_sec` | `integer` | No | `7200` | Entero `> 0`. Timeout por defecto de cada respaldo Firebird cuando la base no define `gbak_timeout_sec`. |
+| `pg_dump_timeout_sec` | `integer` | No | `7200` | Entero `> 0`. Timeout por defecto de cada respaldo PostgreSQL cuando la base no define `pg_dump_timeout_sec`. (Especificación aprobada; ver nota de alcance.) |
 | `sftp_retries` | `integer` | No | `3` | Entero `>= 0`. **Aceptado sin efecto en 1.0.0**: cada servidor usa su propio `sftp_retries`. |
 | `sftp_connect_timeout_sec` | `integer` | No | `30` | Entero `> 0`. **Aceptado sin efecto en 1.0.0**: cada servidor usa su propio `sftp_connect_timeout_sec`. |
 
@@ -432,7 +474,8 @@ están en [`docs/security.md`](security.md#4-políticas-de-host-key).
 Con `retention_days > 0`, después del correo se eliminan de `work_dir`:
 
 - archivos **regulares** de nivel superior cuyo nombre cumpla
-  `<nombre>_<YYYYMMDD_HHMMSS>.fbk` o `<nombre>_<YYYYMMDD_HHMMSS>.fbk.7z`;
+  `<nombre>_<YYYYMMDD_HHMMSS>.fbk`, `<nombre>_<YYYYMMDD_HHMMSS>.fbk.7z`,
+  `<nombre>_<YYYYMMDD_HHMMSS>.dump` o `<nombre>_<YYYYMMDD_HHMMSS>.dump.7z`;
 - con `mtime` estrictamente anterior a `ahora - retention_days` días;
 - que no hayan sido creados por la corrida actual (`mtime >= inicio`).
 
@@ -451,7 +494,9 @@ el tamaño de tus bases y la frecuencia de respaldo.
 ### 7.4 Timeouts y defaults SFTP
 
 - `local.gbak_timeout_sec` actúa como default; `databases[].gbak_timeout_sec`
-  tiene precedencia cuando no es `null`.
+  tiene precedencia cuando no es `null`. Ídem `local.pg_dump_timeout_sec` /
+  `databases[].pg_dump_timeout_sec` para PostgreSQL (especificación aprobada;
+  ver nota de alcance).
 - `local.sftp_retries` y `local.sftp_connect_timeout_sec` se aceptan y se
   parsean, pero la 1.0.0 **no los propaga** a los servidores. Configurá los
   valores en cada `servers[]`; sus defaults son `3` y `30` respectivamente.
@@ -464,6 +509,7 @@ el tamaño de tus bases y la frecuencia de respaldo.
   "log_dir": null,
   "min_free_mb": 1024,
   "gbak_timeout_sec": 7200,
+  "pg_dump_timeout_sec": 7200,
   "sftp_retries": 3,
   "sftp_connect_timeout_sec": 30
 }
@@ -540,16 +586,22 @@ Además de los tipos y rangos de cada tabla, al cargar se verifican:
 3. **Coherencia de autenticación**:
    - `method: password` exige `password` y prohíbe `private_key`/`passphrase`;
    - `method: key` exige `private_key` y prohíbe `password`.
-4. **STARTTLS/SSL**: `notification.smtp.starttls: true` y
+4. **Coherencia por motor** (espejo del patrón de `auth`; especificación
+   aprobada, ver nota de alcance):
+   - un campo de un motor presente en una entrada del otro →
+     `solo aplica cuando type es '<motor>'`;
+   - `connection` ausente con `type: "firebird"`; `host` o `dbname` ausentes
+     con `type: "postgresql"` → `es requerido cuando type es '...'`.
+5. **STARTTLS/SSL**: `notification.smtp.starttls: true` y
    `notification.smtp.ssl: true` son incompatibles.
-5. **Campos desconocidos**: se rechazan en todos los niveles, con sugerencia
+6. **Campos desconocidos**: se rechazan en todos los niveles, con sugerencia
    de typo.
-6. **Listas mínimas**: `databases` no puede estar vacía; la lista `databases`
+7. **Listas mínimas**: `databases` no puede estar vacía; la lista `databases`
    de un job tampoco.
-7. **Tipos estrictos**: no hay coerción de `"3"` a `3`, de `1` a `true` ni de
+8. **Tipos estrictos**: no hay coerción de `"3"` a `3`, de `1` a `true` ni de
    `"yes"` a `true`.
-8. **Rutas**: `work_dir`, `log_dir`, `gbak_path` y `private_key` se normalizan;
-   `connection` y `remote_path` no.
+9. **Rutas**: `work_dir`, `log_dir`, `gbak_path`, `pg_dump_path` y
+   `private_key` se normalizan; `connection` y `remote_path` no.
 
 Los problemas estructurales se acumulan y se informan juntos. Si la estructura
 es válida, se aplican las reglas semánticas y también se informan todas juntas.
@@ -571,6 +623,7 @@ lectura. Al final configura el logging, que puede crear `local.log_dir` y
 | `local.log_dir` | Existencia/creabilidad; si es `null`, informa el derivado `<work_dir>/logs`. |
 | `local.min_free_mb` | Espacio libre en el ancestro existente más cercano a `work_dir`. |
 | `databases[].gbak_path` | Existencia, que no sea un directorio y permisos de ejecución (solo si es explícito). |
+| `databases[].pg_dump_path` | Ídem para PostgreSQL (solo si es explícito); `null` se informa como auto-detección. (Especificación aprobada; ver nota de alcance.) |
 | `servers[].auth.private_key` | Existencia, legibilidad y permisos recomendados (solo con `method: key`). |
 | `host_key_policy: insecure` | Advertencia de MITM. |
 | SMTP sin cifrar | Advertencia si `starttls: false` y `ssl: false`. |
@@ -582,8 +635,8 @@ lectura. Al final configura el logging, que puede crear `local.log_dir` y
 - Sin `--strict`, las advertencias no invalidan la configuración (exit `0`).
   Con `--strict`, cualquier advertencia devuelve exit `2`.
 - Un error de estructura, tipo, rango o regla cruzada devuelve exit `2`.
-- La validación **no** comprueba conectividad con Firebird, SFTP ni SMTP; un
-  destino caído no invalida el JSON.
+- La validación **no** comprueba conectividad con Firebird, PostgreSQL, SFTP
+  ni SMTP; un destino caído no invalida el JSON.
 
 ```bash
 odin validate --config /etc/odin/config.json
@@ -612,6 +665,7 @@ que hoy no existen.
 | `local.log_level: "CRITICAL"` | No soportado | El enum solo acepta `DEBUG`, `INFO`, `WARNING` y `ERROR`. |
 | `local.min_free_mb` | Solo `odin validate` | No bloquea ni condiciona `odin run`; es una advertencia temprana. |
 | `databases[].name` | Sin validación de caracteres | Se usa como prefijo del nombre de archivo. Evitá separadores de ruta y caracteres inválidos del sistema de archivos. |
+| `databases[].type` y campos PostgreSQL | Especificación aprobada, no implementada | `type`, `host`, `port`, `dbname`, `pg_dump_path`, `pg_dump_timeout_sec` y `local.pg_dump_timeout_sec` se documentan en esta guía según [`docs/postgresql.md`](postgresql.md), pero el parser de la 1.0.0 todavía los rechaza; entran en vigor con esa implementación. |
 | `servers[].remote_path` relativo | Aceptado, no recomendado | La creación de directorios lo interpreta desde `/`; usá una ruta absoluta para evitar discrepancias. |
 
 Si necesitás uno de estos comportamientos en producción, verificalo contra la
@@ -632,6 +686,7 @@ idéntico.
   "databases": [
     {
       "name": "erp_principal",
+      "type": "firebird",
       "connection": "localhost/3050:/var/lib/firebird/data/erp.fdb",
       "user": "SYSDBA",
       "password": "***",
@@ -639,6 +694,17 @@ idéntico.
       "charset": "ISO8859_1",
       "gbak_path": null,
       "gbak_timeout_sec": null
+    },
+    {
+      "name": "ventas_pg",
+      "type": "postgresql",
+      "host": "db.example.com",
+      "port": 5432,
+      "dbname": "ventas",
+      "user": "odin_backup",
+      "password": "***",
+      "pg_dump_path": null,
+      "pg_dump_timeout_sec": null
     }
   ],
   "compression": {
@@ -702,6 +768,7 @@ idéntico.
     "log_dir": null,
     "min_free_mb": 1024,
     "gbak_timeout_sec": 7200,
+    "pg_dump_timeout_sec": 7200,
     "sftp_retries": 3,
     "sftp_connect_timeout_sec": 30
   },

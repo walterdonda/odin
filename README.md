@@ -1,9 +1,16 @@
 # ODIN
 
-Respaldo externo de bases de datos Firebird (2.5 → 6): backup con `gbak`,
-compresión 7z, transferencia SFTP (paramiko) y notificación por correo.
+Respaldo externo de bases de datos: Firebird (2.5 → 6) con `gbak` y
+PostgreSQL (18+) con `pg_dump`, compresión 7z, transferencia SFTP (paramiko) y
+notificación por correo.
 
 > Proyecto en desarrollo bajo el flujo AIDE (`docs/aide/`).
+>
+> El soporte PostgreSQL está **especificado y aprobado pero aún sin
+> implementar** (mapa wayfinder `soporte-postgresql`): el detalle y el plan
+> están en [`docs/postgresql.md`](docs/postgresql.md) y el contrato de
+> configuración en [`docs/configuration.md`](docs/configuration.md). Hasta que
+> esa implementación aterrice, ODIN respalda solo Firebird.
 
 ## Índice
 
@@ -39,6 +46,7 @@ compresión 7z, transferencia SFTP (paramiko) y notificación por correo.
 | Sistema operativo | Windows Server 2016+ o Linux LTS. Misma base de código; la CI corre en `ubuntu-latest` y `windows-latest`. |
 | Python | ≥ 3.14 (`requires-python = ">=3.14"`), gestionado con [uv](https://docs.astral.sh/uv/). `tzdata` viaja como dependencia para `scheduler.timezone` donde el SO no trae la base IANA (Windows y contenedores mínimos). |
 | Firebird | Servidor accesible y `gbak` de la **misma versión mayor** que cada base (cliente o servidor instalado). La [guía de compatibilidad Firebird](docs/firebird.md) cubre la matriz 2.5 → 6 y la resolución de `gbak_path` por plataforma. |
+| PostgreSQL (planificado) | Solo la serie **18.0+**, con `pg_dump` 18 resolviendo a servidores 9.2 → 18.x. Especificación y plan en [`docs/postgresql.md`](docs/postgresql.md); todavía no implementado. |
 | Conectividad | Firebird 3050/TCP (o el puerto configurado), SFTP 22/TCP (o el configurado) y el servidor SMTP. |
 | Permisos | Escritura en `local.work_dir` y en el directorio de logs. `root` (Linux) o consola elevada (Windows) solo para instalar el servicio del SO. |
 
@@ -116,11 +124,14 @@ default, rangos, reglas cruzadas y límites de la versión— está en
 [`docs/configuration.md`](docs/configuration.md). Los ejemplos completos están
 en [`examples/`](examples/) y cada campo se valida al cargar la configuración.
 
-- **`databases[]`** — una entrada por base Firebird. `name` es la clave
-  estable que referencian los jobs del scheduler; `connection` se pasa a
-  `gbak` tal cual (`host/puerto:ruta` o alias). `gbak_path: null` delega la
-  resolución a la auto-detección por SO y versión
-  (ver [`docs/firebird.md`](docs/firebird.md)).
+- **`databases[]`** — una entrada por base, Firebird o PostgreSQL según el
+  campo **`type`** (`"firebird"` | `"postgresql"`, obligatorio). `name` es la
+  clave estable que referencian los jobs del scheduler. En Firebird,
+  `connection` se pasa a `gbak` tal cual (`host/puerto:ruta` o alias) y
+  `gbak_path: null` delega la resolución a la auto-detección por SO y versión
+  (ver [`docs/firebird.md`](docs/firebird.md)). En PostgreSQL, `host`, `port`
+  (default `5432`) y `dbname` apuntan al servidor y `pg_dump_path: null`
+  delega la auto-detección (spec en [`docs/postgresql.md`](docs/postgresql.md)).
 - **`compression`** — nivel de 7z (`0` = *store*, `1–9` = LZMA2; default `7`)
   y `password` opcional para cifrado AES-256 del `.fbk.7z`.
 - **`servers[]`** — destinos SFTP con reintentos, timeouts y política de host
@@ -129,7 +140,8 @@ en [`examples/`](examples/) y cada campo se valida al cargar la configuración.
 - **`notification`** — casilla destino/remitente y transporte SMTP
   (`starttls` por defecto; `smtp.ssl` para SSL implícito).
 - **`local`** — directorios de trabajo y logs, nivel de logging, retención,
-  umbral de espacio libre y timeout por defecto de `gbak`.
+  umbral de espacio libre y timeouts por defecto (`gbak_timeout_sec` y,
+  planificado, `pg_dump_timeout_sec`).
 - **`scheduler`** — jobs cron por subconjunto de bases;
 
   ```json
@@ -155,12 +167,17 @@ en [`examples/`](examples/) y cada campo se valida al cargar la configuración.
 | Bloque / campo | Default | Descripción |
 |---|---|---|
 | `databases[].name` | — (requerido) | Clave única de la base; la usan los jobs. |
-| `databases[].connection` | — (requerido) | Cadena de conexión que se pasa a `gbak`. |
-| `databases[].user` / `.password` | — (requeridos) | Credenciales Firebird; se enmascaran en logs e informes. |
+| `databases[].type` | — (requerido, planificado) | `"firebird"` o `"postgresql"`: elige el motor y qué campos aplican. Especificación aprobada, sin implementar aún. |
+| `databases[].connection` | — (requerido con `type: firebird`) | Cadena de conexión que se pasa a `gbak`. |
+| `databases[].user` / `.password` | — (requeridos) | Credenciales de la base; se enmascaran en logs e informes. En PostgreSQL la contraseña viaja por `PGPASSWORD`. |
 | `databases[].role` | `null` | Rol SQL opcional (`-role`). |
 | `databases[].charset` | `null` | Charset conservado en la configuración; `gbak` no admite switch de charset. |
 | `databases[].gbak_path` | `null` | Ruta explícita al `gbak`; `null` = auto-detección. |
 | `databases[].gbak_timeout_sec` | `null` → `local.gbak_timeout_sec` | Timeout del respaldo por base. |
+| `databases[].host` / `.dbname` | — (requeridos con `type: postgresql`, planificado) | Servidor PostgreSQL (`--host`) y nombre real de la base (`--dbname`; no defaulta a `name`). |
+| `databases[].port` | `5432` (planificado) | Puerto del servidor PostgreSQL (`--port`). |
+| `databases[].pg_dump_path` | `null` (planificado) | Ruta explícita al `pg_dump` 18+; `null` = auto-detección (mayor ≥ 18 gana). |
+| `databases[].pg_dump_timeout_sec` | `null` → `local.pg_dump_timeout_sec` (planificado) | Timeout del respaldo por base. |
 | `compression.level` | `7` | `0` = sin compresión (*store*); `1–9` = LZMA2. |
 | `compression.password` | `null` | Con valor, el `.fbk.7z` se cifra con AES-256. |
 | `servers[].name` | — (requerido) | Identificador del destino en el informe. |
@@ -187,7 +204,8 @@ en [`examples/`](examples/) y cada campo se valida al cargar la configuración.
 | `local.log_level` | `INFO` | `DEBUG`, `INFO`, `WARNING` o `ERROR`. |
 | `local.log_dir` | `null` → `<work_dir>/logs` | Directorio del `odin.log`. |
 | `local.min_free_mb` | `1024` | Espacio libre mínimo comprobado por `odin validate` en `work_dir`; no bloquea `odin run`. |
-| `local.gbak_timeout_sec` | `7200` | Timeout por defecto del respaldo. |
+| `local.gbak_timeout_sec` | `7200` | Timeout por defecto del respaldo Firebird. |
+| `local.pg_dump_timeout_sec` | `7200` (planificado) | Timeout por defecto del respaldo PostgreSQL. |
 | `local.sftp_retries` | `3` | Aceptado; sin efecto en 1.0.0. Cada servidor usa su propio `sftp_retries` (default `3`). |
 | `local.sftp_connect_timeout_sec` | `30` | Aceptado; sin efecto en 1.0.0. Cada servidor usa su propio `sftp_connect_timeout_sec` (default `30`). |
 | `scheduler.enabled` | `false` | Habilita el scheduler interno; `odin service run` exige `true`. |
@@ -253,8 +271,8 @@ de validez, a stdout.
 
 - **Solo lectura:** `validate` no crea ni modifica archivos (el directorio de
   logs lo crea la configuración del logging, después de las verificaciones).
-- **Sin red:** no comprueba conectividad SFTP, SMTP ni Firebird; un destino
-  temporalmente caído no invalida la configuración.
+- **Sin red:** no comprueba conectividad SFTP, SMTP, Firebird ni PostgreSQL;
+  un destino temporalmente caído no invalida la configuración.
 - **Sin secretos:** la salida y el log nunca incluyen contraseñas,
   passphrases ni contenido de claves privadas.
 - **OS-agnóstico:** una ruta cuyo sabor (Windows o POSIX) no coincide con el
