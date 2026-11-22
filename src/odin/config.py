@@ -379,6 +379,14 @@ def _auth_problems(auth: ServerAuth, path: str) -> list[ConfigProblem]:
 _FIREBIRD_ONLY_FIELDS = ("connection", "role", "charset", "gbak_path", "gbak_timeout_sec")
 _POSTGRESQL_ONLY_FIELDS = ("host", "port", "dbname", "pg_dump_path", "pg_dump_timeout_sec")
 
+# Reglas por motor: (motor, campos_requeridos, campos_ajenos, otro_motor).
+# ``campos_requeridos`` son los de conexión exigidos por el motor; los
+# ``campos_ajenos`` (del otro motor) presentes disparan "solo aplica…".
+_DB_ENGINE_RULES: tuple[tuple[DbEngine, tuple[str, ...], tuple[str, ...], DbEngine], ...] = (
+    (DbEngine.FIREBIRD, ("connection",), _POSTGRESQL_ONLY_FIELDS, DbEngine.POSTGRESQL),
+    (DbEngine.POSTGRESQL, ("host", "dbname"), _FIREBIRD_ONLY_FIELDS, DbEngine.FIREBIRD),
+)
+
 
 def _db_problems(database: DatabaseConfig, path: str) -> list[ConfigProblem]:
     """Reglas por motor de ``databases[]`` (espejo del patrón ``_auth_problems``).
@@ -390,41 +398,26 @@ def _db_problems(database: DatabaseConfig, path: str) -> list[ConfigProblem]:
     cuando type es '<motor>'"). ``null`` cuenta como ausente.
     """
     problems: list[ConfigProblem] = []
-    if database.type is DbEngine.FIREBIRD:
-        if not database.connection:
-            problems.append(
-                ConfigProblem(
-                    field_path=f"{path}.connection",
-                    message="es requerido cuando type es 'firebird'",
-                )
-            )
-        other = DbEngine.POSTGRESQL
-        for field_name in _POSTGRESQL_ONLY_FIELDS:
-            if getattr(database, field_name) is not None:
-                problems.append(
-                    ConfigProblem(
-                        field_path=f"{path}.{field_name}",
-                        message=f"solo aplica cuando type es '{other.value}'",
-                    )
-                )
-    else:
-        for field_name in ("host", "dbname"):
+    for motor, required_fields, foreign_fields, other_motor in _DB_ENGINE_RULES:
+        if database.type is not motor:
+            continue
+        for field_name in required_fields:
             if not getattr(database, field_name):
                 problems.append(
                     ConfigProblem(
                         field_path=f"{path}.{field_name}",
-                        message="es requerido cuando type es 'postgresql'",
+                        message=f"es requerido cuando type es '{motor.value}'",
                     )
                 )
-        other = DbEngine.FIREBIRD
-        for field_name in _FIREBIRD_ONLY_FIELDS:
+        for field_name in foreign_fields:
             if getattr(database, field_name) is not None:
                 problems.append(
                     ConfigProblem(
                         field_path=f"{path}.{field_name}",
-                        message=f"solo aplica cuando type es '{other.value}'",
+                        message=f"solo aplica cuando type es '{other_motor.value}'",
                     )
                 )
+        break
     return problems
 
 

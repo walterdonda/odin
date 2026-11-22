@@ -219,6 +219,26 @@ def test_postgresql_build_command_default_port_when_absent() -> None:
     assert command[command.index("--port") + 1] == "5432"
 
 
+def test_postgresql_build_command_requires_host() -> None:
+    # Fail-fast: sin ``host`` no se emiten flags vacíos (config sin validar).
+    config = DatabaseConfig(
+        name="ventas_pg", type=DbEngine.POSTGRESQL, dbname="ventas",
+        user="odin_backup", password="s3cret",
+    )
+    with pytest.raises(EngineError, match="host"):
+        PostgreSQLEngine().build_command(PG_DUMP, "", "/tmp/ventas.dump", config)
+
+
+def test_postgresql_build_command_requires_dbname() -> None:
+    # Fail-fast: sin ``dbname`` no se emiten flags vacíos (config sin validar).
+    config = DatabaseConfig(
+        name="ventas_pg", type=DbEngine.POSTGRESQL, host="db.example.com",
+        user="odin_backup", password="s3cret",
+    )
+    with pytest.raises(EngineError, match="dbname"):
+        PostgreSQLEngine().build_command(PG_DUMP, "", "/tmp/ventas.dump", config)
+
+
 def test_postgresql_not_found_message_names_binary_and_hint() -> None:
     message = PostgreSQLEngine().not_found_message()
     assert "pg_dump" in message
