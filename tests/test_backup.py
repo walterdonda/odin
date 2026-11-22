@@ -199,7 +199,7 @@ def test_empty_output_file_fails_validation(executor: BackupExecutor, tmp_path: 
 def test_auto_detection_when_no_path_given(tmp_path: Path) -> None:
     backup = tmp_path / "db.fbk"
     with (
-        patch("odin.backup.find_gbak", return_value=Path(GBACK)),
+        patch("odin.engines.firebird.find_gbak", return_value=Path(GBACK)),
         patch("odin.backup.subprocess.run", side_effect=_success_side_effect) as mock_run,
     ):
         result = BackupExecutor().run_backup("db_name", "db.fdb", str(backup))
@@ -212,7 +212,7 @@ def test_auto_detection_when_no_path_given(tmp_path: Path) -> None:
 
 def test_gbak_not_found_is_reported_in_result(tmp_path: Path) -> None:
     with (
-        patch("odin.backup.find_gbak", return_value=None),
+        patch("odin.engines.firebird.find_gbak", return_value=None),
         patch("odin.backup.subprocess.run") as mock_run,
     ):
         result = BackupExecutor().run_backup("db_name", "db.fdb", str(tmp_path / "db.fbk"))
