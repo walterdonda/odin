@@ -4,7 +4,10 @@ El repositorio no tiene remoto todavía, así que la CI no se ha ejecutado: este
 test mantiene el YAML como contrato verificable en local (estructura de los
 jobs, gate único del Item 071, artefacto del wheel, `permissions` de solo
 lectura, ausencia de secretos y el smoke de Windows del Item 073), para que al
-publicar el repositorio el workflow no derive en silencio.
+publicar el repositorio el workflow no derive en silencio. El job `postgresql`
+del soporte PostgreSQL (mapa `soporte-postgresql`, ticket 06) corre la
+integración end-to-end contra un servicio `postgres:18` y también queda fijado
+acá.
 
 Se parsea con PyYAML (`pyyaml` en el grupo `dev`). Ojo: YAML 1.1 lee la clave
 `on` como el booleano `True`; el helper `_triggers` normaliza ambas formas.
@@ -21,6 +24,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 SMOKE_TEST_PATH = REPO_ROOT / "tests" / "test_service_windows_integration.py"
+POSTGRES_INTEGRATION_TEST_PATH = REPO_ROOT / "tests" / "test_backup_integration_postgres.py"
 VERIFY_SCRIPT = "scripts/verify.py"
 SMOKE_ENV_VAR = "ODIN_WINDOWS_SERVICE_SMOKE"
 
@@ -134,5 +138,51 @@ def test_smoke_test_module_is_gated_and_marked_integration() -> None:
     assert SMOKE_TEST_PATH.is_file()
     text = SMOKE_TEST_PATH.read_text(encoding="utf-8")
     assert f'"{SMOKE_ENV_VAR}"' in text
+    assert "pytest.mark.integration" in text
+    assert "pytest.mark.skipif" in text
+
+
+def test_postgresql_job_runs_the_integration_suite_against_postgres18(
+    workflow: dict[str, Any],
+) -> None:
+    """Job `postgresql`: servicio `postgres:18` + suite de integración end-to-end."""
+    jobs = workflow.get("jobs")
+    assert isinstance(jobs, dict)
+    assert set(jobs) >= {"linux", "windows", "postgresql"}
+
+    postgresql = jobs["postgresql"]
+    assert postgresql.get("runs-on") == "ubuntu-latest"
+
+    services = postgresql.get("services")
+    assert isinstance(services, dict)
+    postgres = services.get("postgres")
+    assert isinstance(postgres, dict), "falta el servicio postgres:18"
+    assert postgres.get("image") == "postgres:18"
+    assert "POSTGRES_PASSWORD" in postgres.get("env", {})
+    assert "pg_isready" in str(postgres.get("options", "")), (
+        "falta el health check con pg_isready"
+    )
+
+    assert any(uses.startswith("actions/checkout@") for uses in _uses(postgresql))
+    setup_uv = _step_with_uses(postgresql, "astral-sh/setup-uv@")
+    assert setup_uv.get("with", {}).get("enable-cache") is True
+
+    commands = _run_commands(postgresql)
+    assert any(command.startswith("uv sync") for command in commands), "falta 'uv sync'"
+    integration_commands = [
+        command for command in commands if "test_backup_integration_postgres.py" in command
+    ]
+    assert integration_commands, "falta el comando de la suite de integración PostgreSQL"
+    assert integration_commands[0].startswith("uv run pytest")
+
+    # Job liviano de integración: no construye ni publica artefactos.
+    assert all(
+        not uses.startswith("actions/upload-artifact@") for uses in _uses(postgresql)
+    )
+
+
+def test_postgres_integration_test_module_is_marked_integration() -> None:
+    assert POSTGRES_INTEGRATION_TEST_PATH.is_file()
+    text = POSTGRES_INTEGRATION_TEST_PATH.read_text(encoding="utf-8")
     assert "pytest.mark.integration" in text
     assert "pytest.mark.skipif" in text
