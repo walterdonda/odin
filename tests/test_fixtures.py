@@ -101,6 +101,29 @@ def test_examples_load_and_match_vision_structure(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", EXAMPLE_NAMES)
+def test_examples_postgresql_entry_matches_contract(name: str) -> None:
+    """La entrada PostgreSQL de los ejemplos refleja el contrato de dos motores.
+
+    Segunda base con ``type`` explícito y los campos del motor (§3.4 de
+    ``docs/postgresql.md``); ``pg_dump_path: null`` delega la auto-detección,
+    espejo de ``gbak_path: null`` en la entrada Firebird.
+    """
+    config = load_config(EXAMPLES / name)
+    assert len(config.databases) == 2
+    pg = config.databases[1]
+    assert pg.name == "ventas_pg"
+    assert pg.type is DbEngine.POSTGRESQL
+    assert pg.host == "db.example.com"
+    assert pg.port == 5432
+    assert pg.dbname == "ventas"
+    assert pg.user == "odin_backup"
+    assert pg.password == "***"
+    assert pg.pg_dump_path is None
+    assert pg.pg_dump_timeout_sec is None
+    assert config.scheduler.jobs[0].databases == ["nombre_clave_sistema", "ventas_pg"]
+
+
+@pytest.mark.parametrize("name", EXAMPLE_NAMES)
 def test_examples_secrets_are_placeholders(name: str) -> None:
     """Ningún ejemplo commitea credenciales reales: todos los secretos son ``***``."""
     config = load_config(EXAMPLES / name)

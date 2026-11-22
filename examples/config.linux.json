@@ -9,6 +9,17 @@
       "role": null,
       "charset": "ISO8859_1",
       "gbak_path": null
+    },
+    {
+      "name": "ventas_pg",
+      "type": "postgresql",
+      "host": "db.example.com",
+      "port": 5432,
+      "dbname": "ventas",
+      "user": "odin_backup",
+      "password": "***",
+      "pg_dump_path": null,
+      "pg_dump_timeout_sec": null
     }
   ],
   "compression": {
@@ -54,7 +65,7 @@
     "timezone": "America/Argentina/Buenos_Aires",
     "jobs": [
       {
-        "databases": ["nombre_clave_sistema"],
+        "databases": ["nombre_clave_sistema", "ventas_pg"],
         "schedule": "0 2 * * *",
         "on_misfire": "run_once",
         "skip_if_running": true

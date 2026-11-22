@@ -1,13 +1,13 @@
 # Soporte PostgreSQL 18+ — especificación y plan de implementación
 
 > **Estado:** especificación y plan **aprobados** en el mapa wayfinder
-> `soporte-postgresql` (ticket 04, `.scratch/soporte-postgresql/`). La
-> implementación descrita acá es el **handoff posterior al mapa**: hasta que
-> aterrice, los campos y comportamientos de este documento **no están activos**
-> en el código (el parser de la 1.0.0 todavía los rechaza). Los tickets 01–03
-> del mapa (pg_dump 18, contrato de configuración y costura de código) contienen
-> el detalle y las reversiones de decisiones; acá está la versión consolidada y
-> definitiva.
+> `soporte-postgresql` (ticket 04, `.scratch/soporte-postgresql/`) e
+> **implementados** en la versión **1.1.0** (tickets 01–06 del mapa de
+> implementación, `.scratch/soporte-postgresql-impl/`): el contrato de
+> configuración (§3), el engine `pg_dump` (§2, §5), la retención `.dump`, la
+> CLI y la CI de integración ya están activos en el código. Los tickets del
+> mapa contienen el detalle y las reversiones de decisiones; acá está la
+> versión consolidada y definitiva.
 
 - Guía de compatibilidad Firebird (el motor existente): [`docs/firebird.md`](firebird.md).
 - Referencia de configuración (ambos motores): [`docs/configuration.md`](configuration.md).
