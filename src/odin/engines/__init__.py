@@ -5,9 +5,9 @@ El paquete declara la interfaz que todo motor implementa (§5.1 de
 respaldo consume: el detalle operativo (nombre del binario, hint de
 instalación, salida del proceso) lo aporta cada motor.
 
-Hoy existe un solo motor (``odin.engines.firebird.FirebirdEngine``,
-comportamiento idéntico al histórico); el motor PostgreSQL se agrega en el
-ticket 03 sin tocar este protocolo.
+Existen dos motores: ``odin.engines.firebird.FirebirdEngine`` (``gbak``,
+comportamiento histórico) y ``odin.engines.postgresql.PostgreSQLEngine``
+(``pg_dump`` 18+, ticket 03), ambos sobre este protocolo estable.
 """
 
 from __future__ import annotations
