@@ -24,7 +24,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 from odin.cli import ENV_CONFIG_VAR, EXIT_OK, main
-from odin.config import AuthMethod, ConfigError, HostKeyPolicy, LogLevel, load_config
+from odin.config import AuthMethod, ConfigError, DbEngine, HostKeyPolicy, LogLevel, load_config
 from odin.log import LOGGER_NAME
 from odin.validate import validate_config
 
@@ -88,6 +88,7 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_examples_load_and_match_vision_structure(name: str) -> None:
     config = load_config(EXAMPLES / name)
     assert config.databases[0].name == "nombre_clave_sistema"
+    assert config.databases[0].type is DbEngine.FIREBIRD
     assert config.databases[0].charset == "ISO8859_1"
     assert len(config.servers) == 2
     assert config.servers[0].auth.method is AuthMethod.PASSWORD
@@ -176,10 +177,13 @@ def test_minimal_fixture_applies_defaults() -> None:
     assert config.local.resolved_log_dir == config.local.work_dir / "logs"
     # database (campos opcionales omitidos)
     db = config.databases[0]
+    assert db.type is DbEngine.FIREBIRD
     assert db.role is None
     assert db.charset is None
     assert db.gbak_path is None
     assert db.gbak_timeout_sec is None
+    assert db.pg_dump_path is None
+    assert db.pg_dump_timeout_sec is None
 
 
 # --- fixtures de error: field_path específicos ---

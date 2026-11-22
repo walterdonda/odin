@@ -2,6 +2,7 @@
   "databases": [
     {
       "name": "nombre_clave_sistema",
+      "type": "firebird",
       "connection": "localhost/3050:C:\\Datos\\ERP\\erp.fdb",
       "user": "SYSDBA",
       "password": "***",

@@ -46,7 +46,7 @@ from pathlib import Path
 import pytest
 
 from odin.backup import BackupExecutor
-from odin.config import DatabaseConfig
+from odin.config import DatabaseConfig, DbEngine
 from tests.firebird_container import (
     DOCKER,
     MATRIX_IMAGES,
@@ -129,6 +129,7 @@ def _exercise(
     wrapper = container.gbak_wrapper(tmp_path / f"gbak-{image.key}")
     database = DatabaseConfig(
         name=f"matrix_{image.key}",
+        type=DbEngine.FIREBIRD,
         connection=container.database_spec(),
         user=USER,
         password=USER_PASSWORD,

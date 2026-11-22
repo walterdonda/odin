@@ -11,6 +11,7 @@ from odin.config import (
     AuthMethod,
     Config,
     ConfigError,
+    DbEngine,
     HostKeyPolicy,
     LogLevel,
     MisfirePolicy,
@@ -25,6 +26,7 @@ def _base_valid() -> dict[str, Any]:
         "databases": [
             {
                 "name": "erp_principal",
+                "type": "firebird",
                 "connection": "localhost/3050:/var/lib/firebird/data/erp.fdb",
                 "user": "SYSDBA",
                 "password": "masterkey",
@@ -96,9 +98,32 @@ def _mutate(modifier) -> dict[str, Any]:
     return data
 
 
+def _base_valid_postgres() -> dict[str, Any]:
+    data = _base_valid()
+    data["databases"][0] = {
+        "name": "erp_principal",
+        "type": "postgresql",
+        "host": "db.example.com",
+        "port": 5433,
+        "dbname": "erp",
+        "user": "odin_backup",
+        "password": "s3cret",
+        "pg_dump_path": None,
+        "pg_dump_timeout_sec": None,
+    }
+    return data
+
+
+def _mutate_pg(modifier) -> dict[str, Any]:
+    data = _base_valid_postgres()
+    modifier(data)
+    return data
+
+
 def test_load_valid_linux_fixture() -> None:
     config = load_config(FIXTURES / "config_valid_linux.json")
     assert config.databases[0].name == "erp_principal"
+    assert config.databases[0].type is DbEngine.FIREBIRD
     assert config.databases[0].charset == "ISO8859_1"
     assert config.servers[1].auth.method is AuthMethod.KEY
     assert config.scheduler.enabled is True
@@ -121,6 +146,7 @@ def test_minimal_config_applies_defaults(tmp_path: Path) -> None:
     assert config.scheduler.jobs == []
     assert config.local.log_level is LogLevel.INFO
     assert config.local.gbak_timeout_sec == 7200
+    assert config.local.pg_dump_timeout_sec == 7200
     assert config.local.min_free_mb == 1024
     assert config.local.sftp_retries == 3
     assert config.local.sftp_connect_timeout_sec == 30
@@ -538,3 +564,196 @@ def test_server_sftp_field_validation_errors(tmp_path: Path) -> None:
     assert "config.servers[0].sftp_retries" in paths
     assert "config.servers[0].sftp_connect_timeout_sec" in paths
     assert "config.servers[0].sftp_retry_backoff_base" in paths
+
+
+# --- type por entrada (dos motores) ---
+
+
+def test_database_type_is_parsed(tmp_path: Path) -> None:
+    config = _load(tmp_path, _base_valid())
+    assert config.databases[0].type is DbEngine.FIREBIRD
+
+
+def test_database_type_required(tmp_path: Path) -> None:
+    def bad(d: dict[str, Any]) -> None:
+        del d["databases"][0]["type"]
+
+    problems = _problems(tmp_path, _mutate(bad))
+    assert any(
+        p.field_path == "config.databases[0].type" and p.message == "campo requerido ausente"
+        for p in problems
+    )
+
+
+def test_database_type_invalid_enum(tmp_path: Path) -> None:
+    def bad(d: dict[str, Any]) -> None:
+        d["databases"][0]["type"] = "oracle"
+
+    problems = _problems(tmp_path, _mutate(bad))
+    assert any(
+        p.field_path == "config.databases[0].type"
+        and "valor inválido 'oracle'" in p.message
+        and "firebird" in p.message
+        and "postgresql" in p.message
+        for p in problems
+    )
+
+
+# --- campos PostgreSQL ---
+
+
+def test_postgresql_entry_parses_fields(tmp_path: Path) -> None:
+    config = _load(tmp_path, _base_valid_postgres())
+    db = config.databases[0]
+    assert db.type is DbEngine.POSTGRESQL
+    assert db.host == "db.example.com"
+    assert db.port == 5433
+    assert db.dbname == "erp"
+    assert db.connection is None
+    assert db.gbak_path is None
+    assert db.gbak_timeout_sec is None
+    assert db.pg_dump_path is None
+    assert db.pg_dump_timeout_sec is None
+
+
+def test_port_absent_or_null_parses_as_none(tmp_path: Path) -> None:
+    def sin_port(d: dict[str, Any]) -> None:
+        del d["databases"][0]["port"]
+
+    config = _load(tmp_path, _mutate_pg(sin_port))
+    assert config.databases[0].port is None
+
+    def port_null(d: dict[str, Any]) -> None:
+        d["databases"][0]["port"] = None
+
+    config = _load(tmp_path, _mutate_pg(port_null))
+    assert config.databases[0].port is None
+
+
+def test_postgresql_port_bounds(tmp_path: Path) -> None:
+    def muy_bajo(d: dict[str, Any]) -> None:
+        d["databases"][0]["port"] = 0
+
+    problems = _problems(tmp_path, _mutate_pg(muy_bajo))
+    assert any(
+        p.field_path == "config.databases[0].port" and ">= 1" in p.message for p in problems
+    )
+
+    def muy_alto(d: dict[str, Any]) -> None:
+        d["databases"][0]["port"] = 65536
+
+    problems = _problems(tmp_path, _mutate_pg(muy_alto))
+    assert any(
+        p.field_path == "config.databases[0].port" and "<= 65535" in p.message for p in problems
+    )
+
+
+def test_pg_dump_path_relative_with_backslashes(tmp_path: Path) -> None:
+    def pg(d: dict[str, Any]) -> None:
+        d["databases"][0]["pg_dump_path"] = "bin\\pg_dump.exe"
+
+    config = _load(tmp_path, _mutate_pg(pg))
+    assert config.databases[0].pg_dump_path is not None
+    assert Path(config.databases[0].pg_dump_path).as_posix() == (
+        tmp_path / "bin/pg_dump.exe"
+    ).as_posix()
+
+
+def test_pg_dump_timeout_must_be_positive(tmp_path: Path) -> None:
+    def bad(d: dict[str, Any]) -> None:
+        d["databases"][0]["pg_dump_timeout_sec"] = 0
+
+    problems = _problems(tmp_path, _mutate_pg(bad))
+    assert any(
+        p.field_path == "config.databases[0].pg_dump_timeout_sec" and "> 0" in p.message
+        for p in problems
+    )
+
+
+# --- checks condicionales por motor (_db_problems) ---
+
+
+def test_firebird_connection_required_semantically(tmp_path: Path) -> None:
+    def sin_conexion(d: dict[str, Any]) -> None:
+        del d["databases"][0]["connection"]
+
+    problems = _problems(tmp_path, _mutate(sin_conexion))
+    assert any(
+        p.field_path == "config.databases[0].connection"
+        and p.message == "es requerido cuando type es 'firebird'"
+        for p in problems
+    )
+
+
+def test_firebird_entry_rejects_postgresql_fields(tmp_path: Path) -> None:
+    def intrusos(d: dict[str, Any]) -> None:
+        d["databases"][0].update(host="db.example.com", port=5432, dbname="erp")
+
+    problems = _problems(tmp_path, _mutate(intrusos))
+    by_path = {p.field_path: p.message for p in problems}
+    for field in ("host", "port", "dbname"):
+        assert by_path.get(f"config.databases[0].{field}") == (
+            "solo aplica cuando type es 'postgresql'"
+        )
+
+
+def test_firebird_entry_ignores_null_postgresql_fields(tmp_path: Path) -> None:
+    def nulos(d: dict[str, Any]) -> None:
+        d["databases"][0].update(host=None, port=None, dbname=None, pg_dump_path=None)
+
+    config = _load(tmp_path, _mutate(nulos))
+    assert config.databases[0].type is DbEngine.FIREBIRD
+
+
+def test_postgresql_entry_requires_host_and_dbname(tmp_path: Path) -> None:
+    def faltantes(d: dict[str, Any]) -> None:
+        del d["databases"][0]["host"]
+        del d["databases"][0]["dbname"]
+
+    problems = _problems(tmp_path, _mutate_pg(faltantes))
+    by_path = {p.field_path: p.message for p in problems}
+    assert by_path.get("config.databases[0].host") == "es requerido cuando type es 'postgresql'"
+    assert by_path.get("config.databases[0].dbname") == "es requerido cuando type es 'postgresql'"
+
+
+def test_postgresql_entry_rejects_firebird_fields(tmp_path: Path) -> None:
+    def intrusos(d: dict[str, Any]) -> None:
+        d["databases"][0].update(
+            connection="localhost:/var/lib/firebird/data/erp.fdb",
+            role="RDB$ADMIN",
+            charset="UTF8",
+            gbak_path="/opt/firebird/bin/gbak",
+            gbak_timeout_sec=60,
+        )
+
+    problems = _problems(tmp_path, _mutate_pg(intrusos))
+    by_path = {p.field_path: p.message for p in problems}
+    for field in ("connection", "role", "charset", "gbak_path", "gbak_timeout_sec"):
+        assert by_path.get(f"config.databases[0].{field}") == (
+            "solo aplica cuando type es 'firebird'"
+        )
+
+
+# --- local.pg_dump_timeout_sec ---
+
+
+def test_local_pg_dump_timeout_defaults_to_7200(tmp_path: Path) -> None:
+    config = _load(tmp_path, _base_valid())
+    assert config.local.pg_dump_timeout_sec == 7200
+
+
+def test_local_pg_dump_timeout_parses_and_must_be_positive(tmp_path: Path) -> None:
+    def explicito(d: dict[str, Any]) -> None:
+        d["local"]["pg_dump_timeout_sec"] = 3600
+
+    config = _load(tmp_path, _mutate(explicito))
+    assert config.local.pg_dump_timeout_sec == 3600
+
+    def cero(d: dict[str, Any]) -> None:
+        d["local"]["pg_dump_timeout_sec"] = 0
+
+    problems = _problems(tmp_path, _mutate(cero))
+    assert any(
+        p.field_path == "config.local.pg_dump_timeout_sec" and "> 0" in p.message
+        for p in problems
+    )
