@@ -9,7 +9,10 @@
 # localmente: `uv sync` -> pytest -> ruff -> mypy -> `odin validate` de los dos
 # ejemplos. El job Windows suma el ciclo de vida real del servicio contra el
 # SCM (los runners son administradores) con el escenario gated
-# `ODIN_WINDOWS_SERVICE_SMOKE=1`.
+# `ODIN_WINDOWS_SERVICE_SMOKE=1`. El job `postgresql` (soporte PostgreSQL)
+# suma la integración end-to-end contra un servicio `postgres:18` (imagen
+# oficial, health check con `pg_isready`; la contraseña es un valor de prueba
+# fijo, no un secreto).
 
 name: CI
 
@@ -48,6 +51,34 @@ jobs:
           name: odin-wheel-linux
           path: dist/*.whl
           if-no-files-found: error
+
+  postgresql:
+    name: PostgreSQL (ubuntu-latest)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: odin-postgres
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Instalar uv (con caché)
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Sincronizar el entorno
+        run: uv sync --locked
+
+      - name: Integración PostgreSQL (postgres:18)
+        run: uv run pytest tests/test_backup_integration_postgres.py -q
 
   windows:
     name: Windows (windows-latest)
