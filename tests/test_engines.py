@@ -16,6 +16,7 @@ import pytest
 from odin.config import DatabaseConfig, DbEngine
 from odin.engines import EngineError, EngineExecutionError, EngineNotFoundError
 from odin.engines.firebird import FirebirdEngine
+from odin.engines.postgresql import PostgreSQLEngine
 
 
 @pytest.fixture
@@ -147,3 +148,115 @@ def test_execution_error_falls_back_to_stdout_and_default_detail() -> None:
         "gbak falló (código 2): fallo de gbak"
     )
     assert str(EngineExecutionError("gbak", 3, "", "")) == "gbak falló (código 3): sin detalle"
+
+
+# --- protocolo PostgreSQL (ticket 03) ---
+
+
+PG_DUMP = "/usr/bin/pg_dump"
+
+
+@pytest.fixture
+def pg_db_config() -> DatabaseConfig:
+    return DatabaseConfig(
+        name="ventas_pg",
+        type=DbEngine.POSTGRESQL,
+        host="db.example.com",
+        port=5432,
+        dbname="ventas",
+        user="odin_backup",
+        password="s3cret",
+    )
+
+
+def test_postgresql_protocol_attributes() -> None:
+    engine = PostgreSQLEngine()
+    assert engine.binary_name == "pg_dump"
+    assert engine.extension == ".dump"
+    # Sin flags de secreto: la contraseña viaja por PGPASSWORD, nunca en argv.
+    assert engine.secret_flags == ()
+    assert engine.error_patterns == (
+        "password authentication failed",
+        "no password supplied",
+        "no pg_hba.conf entry",
+        "connection to server at",
+        "connection to server on socket",
+        "could not translate host name",
+        "timeout expired",
+        "server version mismatch",
+    )
+
+
+def test_postgresql_env_sets_only_pgpassword(pg_db_config: DatabaseConfig) -> None:
+    assert PostgreSQLEngine().env(pg_db_config) == {"PGPASSWORD": "s3cret"}
+
+
+def test_postgresql_env_without_config_is_empty() -> None:
+    assert PostgreSQLEngine().env(None) == {}
+
+
+def test_postgresql_build_command_exact(pg_db_config: DatabaseConfig) -> None:
+    command = PostgreSQLEngine().build_command(PG_DUMP, "", "/tmp/ventas.dump", pg_db_config)
+    assert command == [
+        PG_DUMP,
+        "--host", "db.example.com",
+        "--port", "5432",
+        "--username", "odin_backup",
+        "--dbname", "ventas",
+        "--format=custom",
+        "--no-password",
+        "--no-privileges",
+        "--file", "/tmp/ventas.dump",
+    ]
+
+
+def test_postgresql_build_command_default_port_when_absent() -> None:
+    config = DatabaseConfig(
+        name="ventas_pg", type=DbEngine.POSTGRESQL, host="db.example.com",
+        dbname="ventas", user="odin_backup", password="s3cret",
+    )
+    command = PostgreSQLEngine().build_command(PG_DUMP, "", "/tmp/ventas.dump", config)
+    assert command[command.index("--port") + 1] == "5432"
+
+
+def test_postgresql_not_found_message_names_binary_and_hint() -> None:
+    message = PostgreSQLEngine().not_found_message()
+    assert "pg_dump" in message
+    assert "databases[].pg_dump_path" in message
+    assert "--host" in message
+    assert "--dbname" in message
+
+
+def test_postgresql_resolve_binary_prefers_database_config_over_executor() -> None:
+    config = DatabaseConfig(
+        name="ventas_pg",
+        type=DbEngine.POSTGRESQL,
+        host="db.example.com",
+        dbname="ventas",
+        user="odin_backup",
+        password="s3cret",
+        pg_dump_path="/opt/pg18/bin/pg_dump",
+    )
+    engine = PostgreSQLEngine(PG_DUMP)
+    with patch("odin.engines.postgresql.find_pg_dump") as mock_find:
+        assert engine.resolve_binary(config) == "/opt/pg18/bin/pg_dump"
+        mock_find.assert_not_called()
+
+
+def test_postgresql_resolve_binary_auto_detects_and_caches() -> None:
+    with patch(
+        "odin.engines.postgresql.find_pg_dump", return_value=Path(PG_DUMP)
+    ) as mock_find:
+        engine = PostgreSQLEngine()
+        assert engine.resolve_binary() == PG_DUMP
+        assert engine.resolve_binary() == PG_DUMP
+
+    assert mock_find.call_count == 1
+
+
+def test_postgresql_resolve_binary_raises_not_found_with_hint() -> None:
+    with (
+        patch("odin.engines.postgresql.find_pg_dump", return_value=None),
+        pytest.raises(EngineNotFoundError, match="no se encontró el binario pg_dump"),
+    ):
+        PostgreSQLEngine().resolve_binary()
