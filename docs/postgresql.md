@@ -118,8 +118,11 @@ incluir).
   (`aborting because of server version mismatch`).
 - El artefacto `.dump` restaura en servidores **≥ 18**.
 - Consecuencia para el finder: se busca cualquier major **≥ 18 y gana el
-  mayor**; si solo hay instalaciones ≤ 17, el finder devuelve `None` (equivale
-  a "binario no encontrado", con el hint de instalación del engine).
+  mayor**; si ninguna instalación versionada llega a 18, el finder cae a las
+  rutas sin versión —las típicas y cada entrada del `PATH` (§2.6 "Siempre")—
+  y alcanza la primera que exista; recién si no hay ninguna devuelve `None`
+  (equivale a "binario no encontrado", con el hint de instalación del
+  engine).
 
 ### 2.6 Rutas de `pg_dump` 18 (insumo del finder)
 
@@ -133,7 +136,10 @@ incluir).
 | Siempre | cada entrada de `PATH` + `pg_dump(.exe)` |
 
 La comprobación es de **existencia**, no de ejecutabilidad (la validación fina
-la hace `odin validate`, igual que con gbak).
+la hace `odin validate`, igual que con gbak). Prioridad del finder: entre las
+instalaciones versionadas se aceptan majors ≥ 18 y gana el mayor; si ninguna
+llega a 18, alcanza la primera ruta sin versión existente (las típicas y cada
+entrada del `PATH`, que se consultan **siempre**).
 
 ### 2.7 Serie 18 (estado verificado)
 
@@ -290,7 +296,10 @@ Resuelto en el ticket 03.
 - Constructor gana `pg_dump_path` junto al `gbak_path` actual; timeout por base
   `pg_dump_timeout_sec`; `_masked_command` pasa a usar `secret_flags` del
   engine.
-- `odin.pipeline` **no cambia** (solo docstring): el pipeline consume
+- `odin.pipeline` gana **una línea funcional**: el wiring de
+  `local.pg_dump_timeout_sec` al `BackupExecutor` (junto al
+  `local.gbak_timeout_sec` existente), porque §3.7 exige que la precedencia de
+  timeout llegue vía el ejecutor. El resto del pipeline consume
   `BackupExecutor` y los resultados genéricos; compresión/transferencia/correo/
   retención siguen igual (la compresión recibe `archive_path` cualquiera sea la
   extensión).
@@ -299,8 +308,11 @@ Resuelto en el ticket 03.
 
 - `odin/gbak_finder.py` queda **intacto**.
 - `odin/pg_dump_finder.py` espejo, con las rutas verificadas de §2.6 y la
-  regla "**major ≥ 18, gana el mayor**; solo ≤ 17 → `None`". Sin verificación
-  de versión en runtime (regla documentada: existir en una ruta típica basta).
+  regla "**major ≥ 18, gana el mayor**; si ninguna instalación versionada
+  llega a 18, alcanza la primera ruta sin versión existente (típicas y cada
+  entrada del `PATH`); recién entonces `None`". Sin verificación de versión
+  en runtime (regla documentada: existir en una ruta típica o del `PATH`
+  basta).
 
 ### 5.4 Retención
 
@@ -311,7 +323,7 @@ Resuelto en el ticket 03.
 
 - Descripción raíz y helps generales para los motores (ya no "solo Firebird");
   resúmenes por base genéricos; exit codes 0/1/2/3/4 intactos; `pipeline.py`
-  intacto.
+  con la línea de wiring del timeout pg_dump (§5.2).
 
 ### 5.6 `odin validate`
 
@@ -345,7 +357,7 @@ Resuelto en el ticket 03.
 
 | Archivo | Cobertura |
 |---|---|
-| `tests/test_pg_dump_finder.py` | rutas por plataforma, filtro ≥ 18, mayor gana, `None` ante solo ≤ 17 |
+| `tests/test_pg_dump_finder.py` | rutas por plataforma, filtro ≥ 18, mayor gana, fallback a rutas sin versión (típicas y `PATH`), `None` sin candidatos |
 | `tests/test_config.py` (ampliado) | campos por motor, `type` obligatorio/enum, `_db_problems` (mensajes exactos), `local.pg_dump_timeout_sec` |
 | `tests/test_backup.py` (ampliado) | dispatch por `type`, comando exacto, `PGPASSWORD` en env (nunca logueada), patrones, timeout, not-found con hint por motor |
 | `tests/test_retention.py` (ampliado) | `.dump` y `.dump.7z` gestionados |
@@ -363,7 +375,10 @@ Resuelto en el ticket 03.
   flujo real respaldo contra el contenedor, skip sin Docker (mismo patrón de
   skip que Firebird).
 - Los tests existentes de Firebird **no cambian** salvo los fixtures de config
-  que pasan a incluir `"type": "firebird"`.
+  que pasan a incluir `"type": "firebird"`; además, las construcciones
+  directas de `DatabaseConfig` en los tests ganan `type=DbEngine.FIREBIRD` y
+  los dobles de `BackupExecutor` acompañan la firma nueva (paths y timeouts
+  por motor).
 
 ### 7.3 CI
 

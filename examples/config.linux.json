@@ -58,7 +58,9 @@
   },
   "local": {
     "work_dir": "/var/backups/odin",
-    "retention_days": 7
+    "retention_days": 7,
+    "gbak_timeout_sec": 7200,
+    "pg_dump_timeout_sec": 7200
   },
   "scheduler": {
     "enabled": true,
