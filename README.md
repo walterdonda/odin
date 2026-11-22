@@ -178,7 +178,7 @@ en [`examples/`](examples/) y cada campo se valida al cargar la configuración.
 | `databases[].pg_dump_path` | `null` | Ruta explícita al `pg_dump` 18+; `null` = auto-detección (mayor ≥ 18 gana). |
 | `databases[].pg_dump_timeout_sec` | `null` → `local.pg_dump_timeout_sec` | Timeout del respaldo por base. |
 | `compression.level` | `7` | `0` = sin compresión (*store*); `1–9` = LZMA2. |
-| `compression.password` | `null` | Con valor, el `.fbk.7z` se cifra con AES-256. |
+| `compression.password` | `null` | Con valor, el artefacto `.7z` se cifra con AES-256. |
 | `servers[].name` | — (requerido) | Identificador del destino en el informe. |
 | `servers[].host` / `.port` | — (requeridos) | Servidor SFTP. |
 | `servers[].username` | — (requerido) | Usuario SFTP. |

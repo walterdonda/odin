@@ -1,15 +1,16 @@
 """Auto-detección del binario ``pg_dump`` según SO y versión de PostgreSQL (ticket 03).
 
-Busca primero en las rutas típicas del sistema operativo actual (las
-instalaciones versionadas de PostgreSQL de §2.6 de ``docs/postgresql.md``) y
-después en el ``PATH``. Regla de versión (§2.5): entre las rutas versionadas
-—el major está codificado en la ruta— solo se aceptan majors ≥ 18 y gana el
-mayor; si hay instalaciones versionadas y ninguna llega a 18, devuelve
-``None`` (equivale a "binario no encontrado", con el hint del engine). Las
-rutas sin versión en el nombre (``/usr/bin/pg_dump``, ``/usr/local/pgsql/bin``
-y las entradas del ``PATH``) se prueban únicamente si no hay ninguna
-instalación versionada: para ellas basta la existencia (sin verificación de
-versión en runtime, regla documentada en §2.5).
+Busca en las rutas típicas del sistema operativo actual (las instalaciones
+versionadas de PostgreSQL de §2.6 de ``docs/postgresql.md``) y, como
+fallback, en las rutas sin versión en el nombre —las típicas
+(``/usr/bin/pg_dump``, ``/usr/local/pgsql/bin``) y cada entrada del ``PATH``
+(la regla "Siempre" de §2.6)—. Regla de versión (§2.5): entre las rutas
+versionadas —el major está codificado en la ruta— solo se aceptan majors
+≥ 18 y gana el mayor; si ninguna instalación versionada llega a 18, alcanza
+la primera ruta sin versión que exista, y recién si no hay ninguna devuelve
+``None`` (equivale a "binario no encontrado", con el hint del engine). Para
+las rutas sin versión basta la existencia (sin verificación de versión en
+runtime, regla documentada en §2.5).
 
 El override explícito ``databases[].pg_dump_path`` de la configuración tiene
 precedencia sobre esta detección (lo resuelve ``odin.backup``).
@@ -88,17 +89,17 @@ def find_pg_dump() -> Path | None:
     La comprobación es de existencia, no de ejecutabilidad: la validación fina
     de permisos la hace ``odin validate`` (``validate._check_pg_dump_paths``).
     La versión se lee de la ruta típica (nunca se ejecuta ``pg_dump --version``
-    en runtime): las rutas sin versión en el nombre solo se aceptan cuando no
-    hay ninguna instalación versionada descubierta.
+    en runtime): entre las instalaciones versionadas solo se aceptan majors
+    ≥ 18 y gana el mayor; si ninguna llega a 18, alcanza la primera ruta sin
+    versión existente (típicas y cada entrada del ``PATH``, §2.6 "Siempre") y
+    recién entonces devuelve ``None``.
     """
     windows = sys.platform == "win32"
     executable = "pg_dump.exe" if windows else "pg_dump"
     versioned = _windows_candidates() if windows else _posix_versioned_candidates()
     existing = [(major, path) for major, path in versioned if path.exists()]
-    if existing:
-        eligible = sorted((major, path) for major, path in existing if major >= _MIN_MAJOR)
-        if not eligible:
-            return None
+    eligible = sorted((major, path) for major, path in existing if major >= _MIN_MAJOR)
+    if eligible:
         # orden creciente de (major, ruta): el último es el major mayor
         return eligible[-1][1]
     unversioned = ([] if windows else list(_POSIX_UNVERSIONED)) + _path_candidates(executable)

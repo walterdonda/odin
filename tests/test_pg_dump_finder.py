@@ -2,12 +2,13 @@
 
 Espejo de ``test_gbak_finder.py`` con la regla de versión del engine
 PostgreSQL: entre las rutas típicas versionadas (el major está en la ruta)
-solo se aceptan majors ≥ 18 y gana el mayor; si hay instalaciones
-versionadas y ninguna llega a 18, ``find_pg_dump`` devuelve ``None``. Las
-rutas sin versión en el nombre (``/usr/bin/pg_dump``, ``/usr/local/pgsql/bin``
-y las entradas del ``PATH``) se prueban únicamente cuando no hay ninguna
-instalación versionada: para ellas basta la existencia (sin verificación de
-versión en runtime, regla documentada en §2.5).
+solo se aceptan majors ≥ 18 y gana el mayor; si ninguna instalación
+versionada llega a 18, ``find_pg_dump`` cae a las rutas sin versión en el
+nombre —las típicas (``/usr/bin/pg_dump``, ``/usr/local/pgsql/bin``) y cada
+entrada del ``PATH`` (la regla "Siempre" de §2.6)— y la primera que existe
+alcanza; recién entonces devuelve ``None``. Para las rutas sin versión basta
+la existencia (sin verificación de versión en runtime, regla documentada en
+§2.5).
 """
 
 import unittest
@@ -60,9 +61,9 @@ class TestPgDumpFinder(unittest.TestCase):
     @patch("pathlib.Path.glob")
     @patch("os.path.exists")
     @patch("sys.platform", "linux")
-    def test_solo_majors_17_o_menores_devuelve_none(self, mock_exists, mock_glob):
-        # Solo instalaciones ≤ 17: ninguna alcanza el mínimo y el finder
-        # devuelve None aunque existan (equivale a "binario no encontrado").
+    def test_solo_majors_17_sin_binario_en_path_devuelve_none(self, mock_exists, mock_glob):
+        # Solo instalaciones ≤ 17 y nada en las rutas sin versión: el finder
+        # devuelve None (equivale a "binario no encontrado").
         mock_glob.side_effect = lambda *args: (
             [Path("/usr/lib/postgresql/17"), Path("/usr/lib/postgresql/15")]
             if args[-1] == "*"
@@ -76,6 +77,43 @@ class TestPgDumpFinder(unittest.TestCase):
             found = find_pg_dump()
 
         self.assertIsNone(found)
+
+    @patch("pathlib.Path.glob")
+    @patch("os.path.exists")
+    @patch("sys.platform", "linux")
+    def test_majors_17_caen_a_una_entrada_del_path(self, mock_exists, mock_glob):
+        # Ninguna instalación versionada llega a 18, pero hay un pg_dump en el
+        # PATH: la regla "Siempre" de §2.6 lo usa antes de rendirse.
+        mock_glob.side_effect = lambda *args: (
+            [Path("/usr/lib/postgresql/17"), Path("/usr/lib/postgresql/15")]
+            if args[-1] == "*"
+            else []
+        )
+        mock_exists.side_effect = lambda path: (
+            Path(path).as_posix() == "/opt/pg/bin/pg_dump"
+            or Path(path).as_posix().startswith("/usr/lib/postgresql/")
+        )
+
+        with patch.dict("os.environ", {"PATH": "/opt/other:/opt/pg/bin"}):
+            found = find_pg_dump()
+
+        self.assertEqual(found.as_posix(), "/opt/pg/bin/pg_dump")
+
+    @patch("pathlib.Path.glob")
+    @patch("os.path.exists")
+    @patch("sys.platform", "linux")
+    def test_major_18_gana_sobre_una_entrada_del_path(self, mock_exists, mock_glob):
+        # Instalación versionada ≥ 18 presente: gana sobre cualquier binario
+        # del PATH (el fallback a rutas sin versión no se consulta).
+        mock_glob.side_effect = lambda *args: (
+            [Path("/usr/lib/postgresql/18")] if args[-1] == "*" else []
+        )
+        mock_exists.return_value = True
+
+        with patch.dict("os.environ", {"PATH": "/opt/pg/bin"}):
+            found = find_pg_dump()
+
+        self.assertEqual(found.as_posix(), "/usr/lib/postgresql/18/bin/pg_dump")
 
     @patch("pathlib.Path.glob", return_value=[])
     @patch("os.path.exists")

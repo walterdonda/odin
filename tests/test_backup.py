@@ -624,3 +624,51 @@ def test_batch_pg_dump_isolates_partial_failure(tmp_path: Path) -> None:
     assert [result.success for result in batch.results] == [True, False]
     assert batch.results[1].error_message is not None
     assert "timeout expired" in batch.results[1].error_message
+
+
+# --- cache del finder por lote ---
+
+
+def test_batch_runs_firebird_finder_once_per_batch(tmp_path: Path) -> None:
+    # El lote reusa el executor (y sus engines): la auto-detección de gbak
+    # corre una sola vez aunque haya varias bases sin ``gbak_path``.
+    databases = [
+        DatabaseConfig(
+            name="fb1", type=DbEngine.FIREBIRD, connection="fb1.fdb", user="sysdba",
+            password="masterkey",
+        ),
+        DatabaseConfig(
+            name="fb2", type=DbEngine.FIREBIRD, connection="fb2.fdb", user="sysdba",
+            password="masterkey",
+        ),
+    ]
+    with (
+        patch("odin.engines.firebird.find_gbak", return_value=Path(GBACK)) as mock_find,
+        patch("odin.backup.subprocess.run", side_effect=_success_side_effect),
+    ):
+        batch = BackupExecutor(timeout=10).run_batch_backup(databases, tmp_path)
+
+    assert batch.success
+    assert mock_find.call_count == 1
+
+
+def test_batch_runs_pg_dump_finder_once_per_batch(tmp_path: Path) -> None:
+    # Ídem para pg_dump: el finder se corre una sola vez por lote.
+    databases = [
+        DatabaseConfig(
+            name="pg1", type=DbEngine.POSTGRESQL, host="db.example.com", port=5432,
+            dbname="ventas", user="odin_backup", password="s3cret",
+        ),
+        DatabaseConfig(
+            name="pg2", type=DbEngine.POSTGRESQL, host="db.example.com", port=5432,
+            dbname="stock", user="odin_backup", password="s3cret",
+        ),
+    ]
+    with (
+        patch("odin.engines.postgresql.find_pg_dump", return_value=Path(PG_DUMP)) as mock_find,
+        patch("odin.backup.subprocess.run", side_effect=_pg_success_side_effect),
+    ):
+        batch = BackupExecutor(pg_dump_timeout=10).run_batch_backup(databases, tmp_path)
+
+    assert batch.success
+    assert mock_find.call_count == 1

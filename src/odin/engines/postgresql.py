@@ -51,20 +51,34 @@ class PostgreSQLEngine(Engine):
         target: str,
         db_config: DatabaseConfig | None,
     ) -> list[str]:
-        """Comando exacto de §2.1; ``pg_dump`` escribe el archivo él mismo."""
+        """Comando exacto de §2.1; ``pg_dump`` escribe el archivo él mismo.
+
+        Fail-fast: sin entrada o sin ``host``/``dbname`` (requeridos por §3.4
+        para postgresql) no se construye un comando con flags vacíos.
+        """
         if db_config is None:
             raise EngineError("pg_dump requiere la entrada postgresql (host y dbname)")
+        if not db_config.host:
+            raise EngineError(
+                "pg_dump requiere el campo 'host' de la entrada postgresql "
+                "(databases[].host)"
+            )
+        if not db_config.dbname:
+            raise EngineError(
+                "pg_dump requiere el campo 'dbname' de la entrada postgresql "
+                "(databases[].dbname)"
+            )
         port = db_config.port if db_config.port is not None else _DEFAULT_PORT
         return [
             binary,
             "--host",
-            db_config.host or "",
+            db_config.host,
             "--port",
             str(port),
             "--username",
             db_config.user,
             "--dbname",
-            db_config.dbname or "",
+            db_config.dbname,
             "--format=custom",
             "--no-password",
             "--no-privileges",

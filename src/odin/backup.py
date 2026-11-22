@@ -130,9 +130,15 @@ class BackupExecutor:
         return self._engines[DbEngine.FIREBIRD]
 
     def _timeout_for(self, db_config: DatabaseConfig | None) -> int:
-        """Timeout efectivo del motor de la entrada."""
+        """Timeout efectivo del motor de la entrada (precedencia §3.7).
+
+        El override por base (``databases[].*_timeout_sec``) manda sobre el
+        del ejecutor; ausente/``null`` cae al valor del ejecutor.
+        """
         if db_config is not None and db_config.type is DbEngine.POSTGRESQL:
-            return self.pg_dump_timeout
+            return db_config.pg_dump_timeout_sec or self.pg_dump_timeout
+        if db_config is not None:
+            return db_config.gbak_timeout_sec or self.timeout
         return self.timeout
 
     def run_backup(
@@ -245,21 +251,22 @@ class BackupExecutor:
         )
 
     def _backup_one(self, database: DatabaseConfig, work_dir: Path) -> BackupResult:
-        """Respalda una base, resolviendo su binario y timeout propios por motor."""
+        """Respalda una base con el ejecutor del lote (una instancia por lote).
+
+        Reusar ``self.run_backup`` —en vez de construir un ``BackupExecutor``
+        por base— conserva el cache del finder de ``Engine.resolve_binary``:
+        la auto-detección corre una sola vez por motor y por lote. El
+        override por base (binario y timeout, precedencia §3.7) lo resuelven
+        ``resolve_binary`` vía ``_configured_binary`` y ``_timeout_for``.
+        """
         timestamp = datetime.now().strftime(_TIMESTAMP_FORMAT)
         engine = self._engine_for(database)
         backup_path = work_dir / f"{database.name}_{timestamp}{engine.extension}"
         logger.info("Procesando base '%s' (%s)", database.name, _database_target(database))
-        executor = BackupExecutor(
-            database.gbak_path or self.gbak_path,
-            database.gbak_timeout_sec or self.timeout,
-            pg_dump_path=database.pg_dump_path or self.pg_dump_path,
-            pg_dump_timeout=database.pg_dump_timeout_sec or self.pg_dump_timeout,
-        )
         # La validación de config exige ``connection`` para type=firebird; el
         # ``or ""`` es el fallback de tipos para un modelo sin validar.
         connection = database.connection or ""
-        return executor.run_backup(database.name, connection, str(backup_path), database)
+        return self.run_backup(database.name, connection, str(backup_path), database)
 
     def _check_completed(
         self, engine: Engine, completed: subprocess.CompletedProcess[str]
