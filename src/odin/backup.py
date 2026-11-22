@@ -242,7 +242,10 @@ class BackupExecutor:
             database.gbak_path or self.gbak_path,
             database.gbak_timeout_sec or self.timeout,
         )
-        return executor.run_backup(database.name, database.connection, str(backup_path), database)
+        # La validación de config exige ``connection`` para type=firebird; el
+        # ``or ""`` es el fallback de tipos para un modelo sin validar.
+        connection = database.connection or ""
+        return executor.run_backup(database.name, connection, str(backup_path), database)
 
     def _build_command(
         self,

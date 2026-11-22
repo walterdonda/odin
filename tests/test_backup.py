@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from odin.backup import BackupExecutor
-from odin.config import DatabaseConfig
+from odin.config import DatabaseConfig, DbEngine
 
 GBACK = "/usr/bin/gbak"
 
@@ -39,6 +39,7 @@ def _success_side_effect(command: list[str], **kwargs: object) -> MagicMock:
 def db_config() -> DatabaseConfig:
     return DatabaseConfig(
         name="test_db",
+        type=DbEngine.FIREBIRD,
         connection="test_db.fdb",
         user="sysdba",
         password="masterkey",
@@ -81,6 +82,7 @@ def test_run_backup_with_config_builds_flags(
 def test_run_backup_with_charset_and_role(executor: BackupExecutor, tmp_path: Path) -> None:
     config = DatabaseConfig(
         name="test_db",
+        type=DbEngine.FIREBIRD,
         connection="test_db.fdb",
         user="sysdba",
         password="masterkey",
@@ -227,8 +229,14 @@ def test_gbak_not_found_is_reported_in_result(tmp_path: Path) -> None:
 def test_batch_creates_work_dir_and_backs_up_all(tmp_path: Path) -> None:
     work_dir = tmp_path / "no" / "existe"
     databases = [
-        DatabaseConfig(name="db1", connection="db1.fdb", user="sysdba", password="masterkey"),
-        DatabaseConfig(name="db2", connection="db2.fdb", user="sysdba", password="masterkey"),
+        DatabaseConfig(
+            name="db1", type=DbEngine.FIREBIRD, connection="db1.fdb", user="sysdba",
+            password="masterkey",
+        ),
+        DatabaseConfig(
+            name="db2", type=DbEngine.FIREBIRD, connection="db2.fdb", user="sysdba",
+            password="masterkey",
+        ),
     ]
     with patch("odin.backup.subprocess.run", side_effect=_success_side_effect):
         batch = BackupExecutor(GBACK, timeout=10).run_batch_backup(databases, work_dir)
@@ -244,8 +252,14 @@ def test_batch_creates_work_dir_and_backs_up_all(tmp_path: Path) -> None:
 
 def test_batch_isolates_partial_failure(tmp_path: Path) -> None:
     databases = [
-        DatabaseConfig(name="db1", connection="db1.fdb", user="sysdba", password="masterkey"),
-        DatabaseConfig(name="db2", connection="db2.fdb", user="sysdba", password="masterkey"),
+        DatabaseConfig(
+            name="db1", type=DbEngine.FIREBIRD, connection="db1.fdb", user="sysdba",
+            password="masterkey",
+        ),
+        DatabaseConfig(
+            name="db2", type=DbEngine.FIREBIRD, connection="db2.fdb", user="sysdba",
+            password="masterkey",
+        ),
     ]
 
     def side_effect(command: list[str], **kwargs: object) -> MagicMock:
@@ -265,6 +279,7 @@ def test_batch_isolates_partial_failure(tmp_path: Path) -> None:
 def test_batch_uses_per_database_path_and_timeout(tmp_path: Path) -> None:
     database = DatabaseConfig(
         name="db1",
+        type=DbEngine.FIREBIRD,
         connection="db1.fdb",
         user="sysdba",
         password="masterkey",
@@ -282,7 +297,10 @@ def test_batch_uses_per_database_path_and_timeout(tmp_path: Path) -> None:
 def test_batch_reports_unusable_work_dir(tmp_path: Path) -> None:
     work_dir = tmp_path / "archivo.txt"
     work_dir.write_text("no es un directorio", encoding="utf-8")
-    database = DatabaseConfig(name="db1", connection="db1.fdb", user="sysdba", password="masterkey")
+    database = DatabaseConfig(
+        name="db1", type=DbEngine.FIREBIRD, connection="db1.fdb", user="sysdba",
+        password="masterkey",
+    )
     with patch("odin.backup.subprocess.run", side_effect=_success_side_effect):
         batch = BackupExecutor(GBACK, timeout=10).run_batch_backup([database], work_dir)
 
