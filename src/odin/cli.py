@@ -62,8 +62,9 @@ Convención de exit codes (constantes exportadas de este módulo):
   fallaron (en cualquiera de las fases: respaldo, compresión o transferencia).
   Un fallo de notificación no cambia este código: el correo sí salió.
 - ``EXIT_FAILURE`` (4): el pipeline falló por completo (ninguna base completó
-  todas las fases; p. ej. gbak no encontrado o ``work_dir`` no creable) o el
-  lote no se ejecutó / quedó vacío. Tiene precedencia sobre el correo.
+  todas las fases; p. ej. el binario del motor no encontrado o ``work_dir`` no
+  creable) o el lote no se ejecutó / quedó vacío. Tiene precedencia sobre el
+  correo.
 """
 
 from __future__ import annotations
@@ -183,7 +184,10 @@ def build_parser() -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(
         prog="odin",
-        description="Respaldo externo de bases de datos Firebird: gbak + 7z + SFTP + correo.",
+        description=(
+            "Respaldo externo de bases de datos Firebird y PostgreSQL: "
+            "gbak/pg_dump + 7z + SFTP + correo."
+        ),
     )
     parser.add_argument("--version", action="version", version=f"odin {__version__}")
     subparsers = parser.add_subparsers(dest="command", title="subcomandos")
@@ -212,20 +216,22 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser = subparsers.add_parser(
         "run",
         help=(
-            "Ejecuta respaldo (gbak), compresión 7z, transferencia SFTP, "
+            "Ejecuta respaldo (gbak o pg_dump), compresión 7z, transferencia SFTP, "
             "el correo y la retención."
         ),
         description=(
             "Ejecuta el pipeline completo de cada base de la configuración: respaldo "
-            "(gbak -b), compresión 7z, transferencia SFTP del .fbk.7z a todos los "
-            "servidores configurados y envío del informe por correo, de forma "
-            "secuencial y con aislamiento de fallos por base y por servidor. Los "
-            "artefactos se guardan en local.work_dir como <nombre>_<timestamp>.fbk y "
-            "su .fbk.7z. Una base cuenta como exitosa solo si el respaldo, la "
-            "compresión y la transferencia culminan bien; el correo se envía siempre "
-            "y un fallo de notificación en una corrida por lo demás exitosa devuelve "
-            "exit code 1 (matriz completa: 0/1/3/4). Al final se aplica la retención "
-            "local (local.retention_days); sus errores no alteran el exit code."
+            "(gbak -b para Firebird, pg_dump para PostgreSQL), compresión 7z, "
+            "transferencia SFTP del artefacto comprimido a todos los servidores "
+            "configurados y envío del informe por correo, de forma secuencial y con "
+            "aislamiento de fallos por base y por servidor. Los artefactos se guardan "
+            "en local.work_dir como <nombre>_<timestamp>.fbk (Firebird) o "
+            "<nombre>_<timestamp>.dump (PostgreSQL) y su comprimido .7z. Una base "
+            "cuenta como exitosa solo si el respaldo, la compresión y la "
+            "transferencia culminan bien; el correo se envía siempre y un fallo de "
+            "notificación en una corrida por lo demás exitosa devuelve exit code 1 "
+            "(matriz completa: 0/1/3/4). Al final se aplica la retención local "
+            "(local.retention_days); sus errores no alteran el exit code."
         ),
     )
     run_parser.add_argument(
@@ -491,8 +497,9 @@ def _cmd_validate(args: argparse.Namespace) -> int:
 def _print_backup_summary(batch: BatchBackupResult, *, mask: MaskFn | None = None) -> None:
     """Imprime el resumen del lote: totales a stdout, fallos a stderr.
 
-    Por base exitosa informa ambas fases (Item 026): el ``.fbk`` con tamaño y
-    duración del respaldo y el ``.fbk.7z`` con tamaño comprimido y duración de
+    Por base exitosa informa ambas fases (Item 026): el artefacto de respaldo
+    (``.fbk`` para Firebird, ``.dump`` para PostgreSQL) con tamaño y duración
+    del respaldo y su comprimido ``.7z`` con tamaño comprimido y duración de
     la compresión. Los fallos distinguen respaldo y compresión. Con ``mask``
     (Item 038) cada línea impresa pasa por el enmascarador de secretos de la
     configuración, porque los mensajes de error pueden contener indirectamente

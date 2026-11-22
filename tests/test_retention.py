@@ -37,6 +37,10 @@ def _executor(now: float = NOW) -> RetentionExecutor:
         "erp_principal_20260915_011119.fbk.7z",
         "base con espacios_20260915_011119.fbk",
         "bd_2_20200101_000000.fbk.7z",
+        "erp_principal_20260915_011119.dump",
+        "erp_principal_20260915_011119.dump.7z",
+        "base con espacios_20260915_011119.dump",
+        "bd_2_20200101_000000.dump.7z",
     ],
 )
 def test_managed_backup_convention_accepts_odin_artifacts(name: str) -> None:
@@ -49,14 +53,21 @@ def test_managed_backup_convention_accepts_odin_artifacts(name: str) -> None:
         "config.json",
         "odin.log",
         "notas.fbk.txt",
+        "notas.dump.txt",
         "erp.fbk",
+        "erp.dump",
         "erp_2026.fbk",
         "erp_20260915.fbk",
+        "erp_20260915.dump",
         "erp_20260915_0111.fbk",
         "erp_20260915_011119.zip",
+        "erp_20260915_011119.dmp",
         "erp_20260915_011119.fbk.bak",
+        "erp_20260915_011119.dump.bak",
         "erp_20260915_011119.fbk.7z.tmp",
+        "erp_20260915_011119.dump.7z.tmp",
         "_20260915_011119.fbk.7z",
+        "_20260915_011119.dump.7z",
     ],
 )
 def test_managed_backup_convention_rejects_foreign_names(name: str) -> None:
@@ -108,6 +119,41 @@ def test_recent_artifacts_are_protected_by_run_start(tmp_path: Path) -> None:
     run_start = NOW - 100_000.0
     protected = _touch(tmp_path / "corrida_20200101_000000.fbk", run_start)
     from_previous_run = _touch(tmp_path / "previa_20200101_000000.fbk", run_start - 1)
+
+    result = _executor().run_retention(
+        tmp_path, retention_days=1, run_started_at=run_start
+    )
+
+    assert result.deleted == 1
+    assert protected.exists()
+    assert not from_previous_run.exists()
+
+
+def test_deletes_old_dump_artifacts_like_fbk(tmp_path: Path) -> None:
+    old_dump = _touch(tmp_path / "erp_20200101_000000.dump", NOW - 30 * DAY, b"a" * 10)
+    old_7z = _touch(tmp_path / "erp_20200101_000000.dump.7z", NOW - 30 * DAY, b"b" * 25)
+    recent = _touch(tmp_path / "erp_20260915_011119.dump", NOW - DAY)
+    foreign = _touch(tmp_path / "config.json", NOW - 300 * DAY)
+    notes = _touch(tmp_path / "notas.dump.txt", NOW - 300 * DAY)
+
+    result = _executor().run_retention(tmp_path, retention_days=7)
+
+    assert result.enabled is True
+    assert result.deleted == 2
+    assert result.examined == 3
+    assert result.freed_bytes == 35
+    assert result.errors == ()
+    assert not old_dump.exists()
+    assert not old_7z.exists()
+    assert recent.exists()
+    assert foreign.exists()
+    assert notes.exists()
+
+
+def test_run_start_protects_dump_artifacts(tmp_path: Path) -> None:
+    run_start = NOW - 100_000.0
+    protected = _touch(tmp_path / "corrida_20200101_000000.dump", run_start)
+    from_previous_run = _touch(tmp_path / "previa_20200101_000000.dump", run_start - 1)
 
     result = _executor().run_retention(
         tmp_path, retention_days=1, run_started_at=run_start
@@ -208,8 +254,10 @@ def test_idempotent_second_pass(tmp_path: Path) -> None:
 def test_foreign_managed_lookalikes_are_untouched(tmp_path: Path) -> None:
     lookalikes = [
         _touch(tmp_path / "erp_20260915_011119.fbk.bak", NOW - 300 * DAY),
+        _touch(tmp_path / "erp_20260915_011119.dump.bak", NOW - 300 * DAY),
         _touch(tmp_path / "erp_2026_011119.fbk", NOW - 300 * DAY),
         _touch(tmp_path / "erp_20260915_011119.zip", NOW - 300 * DAY),
+        _touch(tmp_path / "erp_20260915_011119.dump.7z.tmp", NOW - 300 * DAY),
     ]
 
     result = _executor().run_retention(tmp_path, retention_days=7)

@@ -294,6 +294,14 @@ def test_validate_help_lists_strict_flag(capsys: pytest.CaptureFixture[str]) -> 
     assert "--config" in out
 
 
+def test_root_help_describes_both_engines(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main([]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "usage: odin" in out
+    assert "Firebird" in out
+    assert "PostgreSQL" in out
+
+
 def test_validate_reports_warnings_and_still_exits_0(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -597,6 +605,19 @@ def _with_second_database(data: dict[str, Any]) -> None:
     data["databases"].append(second)
 
 
+def _postgresql_entry(data: dict[str, Any]) -> None:
+    """Convierte la base del fixture a ``type: postgresql`` (campos por motor)."""
+    entry = data["databases"][0]
+    entry.update(
+        type="postgresql",
+        host="db.example.com",
+        port=5432,
+        dbname="erp",
+    )
+    for field in ("connection", "role", "charset", "gbak_path"):
+        entry.pop(field, None)
+
+
 def test_run_all_success_exits_0(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -621,6 +642,42 @@ def test_run_all_success_exits_0(
     assert "→" in out
     assert "bytes" in out
     assert (work_dir / "erp_principal.fbk.7z").is_file()
+
+
+def test_run_summary_lists_dump_artifacts_for_postgresql_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_config(tmp_path, mutate=_postgresql_entry)
+    work_dir = tmp_path / "work"
+
+    def builder(databases: list[Any], work_dir: Path) -> BatchBackupResult:
+        name = databases[0].name
+        backup_path = work_dir / f"{name}.dump"
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        backup_path.write_bytes(PAYLOAD)
+        return BatchBackupResult(
+            results=[
+                BackupResult(
+                    success=True,
+                    database_name=name,
+                    backup_path=backup_path,
+                    file_size_bytes=len(PAYLOAD),
+                    duration_seconds=0.1,
+                )
+            ],
+            success=True,
+            total_duration_seconds=0.2,
+        )
+
+    _install_fake_executor(monkeypatch, builder)
+    assert main(["run", "--config", str(config_path)]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "Respaldo y compresión finalizados" in out
+    assert "1/1 base(s) con éxito" in out
+    assert "OK    erp_principal" in out
+    assert str(work_dir / "erp_principal.dump") in out
+    assert str(work_dir / "erp_principal.dump.7z") in out
+    assert (work_dir / "erp_principal.dump.7z").is_file()
 
 
 def test_run_partial_failure_exits_3(
@@ -827,6 +884,15 @@ def test_run_help_lists_config_flag(capsys: pytest.CaptureFixture[str]) -> None:
         main(["run", "--help"])
     assert excinfo.value.code == 0
     assert "--config" in capsys.readouterr().out
+
+
+def test_run_help_describes_both_engines(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        main(["run", "--help"])
+    assert excinfo.value.code == 0
+    out = capsys.readouterr().out
+    assert "Firebird" in out
+    assert "PostgreSQL" in out
 
 
 # --- run con transferencia (Item 035) ---
