@@ -98,9 +98,17 @@ def _write_config(
 class _FakeBackupExecutor:
     """Doble de gbak: escribe un ``.fbk`` real por base (la compresión es real)."""
 
-    def __init__(self, gbak_path: Any = None, timeout: Any = None) -> None:
+    def __init__(
+        self,
+        gbak_path: Any = None,
+        timeout: Any = None,
+        pg_dump_path: Any = None,
+        pg_dump_timeout: Any = None,
+    ) -> None:
         self.gbak_path = gbak_path
         self.timeout = timeout
+        self.pg_dump_path = pg_dump_path
+        self.pg_dump_timeout = pg_dump_timeout
 
     def run_batch_backup(
         self, databases: Sequence[DatabaseConfig], work_dir: Path

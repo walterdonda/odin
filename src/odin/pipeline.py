@@ -191,7 +191,8 @@ def run_pipeline(
     """Ejecuta el pipeline completo de ``odin run`` y devuelve el resultado.
 
     Los ejecutores se construyen desde ``config`` (``local.gbak_timeout_sec``
-    para respaldo; ``compression.level``/``password`` para compresión) y son
+    y ``local.pg_dump_timeout_sec`` para respaldo; ``compression.level``/
+    ``password`` para compresión) y son
     inyectables para tests; el notifier default es
     ``EmailNotifier.from_config(config)`` (Item 043) y el ejecutor de
     retención default es ``RetentionExecutor()`` (Item 046). Cada fase aísla
@@ -206,7 +207,10 @@ def run_pipeline(
     la corrida antes de la limpieza) y sin efecto sobre el resultado global:
     sus errores quedan en ``PipelineResult.retention``.
     """
-    backup_executor = backup or BackupExecutor(timeout=config.local.gbak_timeout_sec)
+    backup_executor = backup or BackupExecutor(
+        timeout=config.local.gbak_timeout_sec,
+        pg_dump_timeout=config.local.pg_dump_timeout_sec,
+    )
     compression_executor = compression or CompressionExecutor(
         level=config.compression.level,
         password=config.compression.password,

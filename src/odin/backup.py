@@ -2,17 +2,20 @@
 
 Responsabilidades:
 
-- Resolver el binario según el motor (precedencia §3.7: ``databases[].*_path``
-  explícito > del ejecutor > auto-detección); si no hay ninguno,
-  ``EngineNotFoundError`` con el mensaje del motor.
-- Ejecutar el comando que construye el motor (hoy Firebird: ``gbak -b``) por
-  base con timeout, enmascarando los secretos declarados en
-  ``Engine.secret_flags`` en los logs.
+- Despachar por ``databases[].type`` al motor correspondiente (Firebird →
+  ``gbak -b``; PostgreSQL → ``pg_dump`` con el comando de §2.1) y resolver su
+  binario con la precedencia §3.7: ``databases[].*_path`` explícito > del
+  ejecutor > auto-detección; si no hay ninguno, ``EngineNotFoundError`` con el
+  mensaje del motor.
+- Ejecutar el comando que construye el motor por base con timeout por motor
+  (``gbak_timeout_sec``/``pg_dump_timeout_sec``), con el ``env`` del motor
+  (pg_dump: ``PGPASSWORD``, nunca en argv ni en logs) y enmascarando en los
+  logs los secretos declarados en ``Engine.secret_flags``.
 - Validar el archivo resultante (existe, tamaño > 0 y legible).
 - Recorrer todas las bases de la configuración de forma secuencial y con
   aislamiento de fallos, creando ``local.work_dir`` si no existe y nombrando
   los archivos ``<nombre_bd>_<timestamp><extensión>`` según el motor
-  (``.fbk`` para Firebird).
+  (``.fbk`` para Firebird, ``.dump`` para PostgreSQL).
 
 Los errores operativos esperados (timeout, fallo del binario, binario
 inexistente, archivo inválido) no se propagan como excepción desde
@@ -31,13 +34,15 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from odin.config import DatabaseConfig
+from odin.config import DatabaseConfig, DbEngine
 from odin.engines import Engine, EngineError, EngineExecutionError
 from odin.engines.firebird import FirebirdEngine
+from odin.engines.postgresql import PostgreSQLEngine
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_GBACK_TIMEOUT_SEC = 7200
+DEFAULT_PG_DUMP_TIMEOUT_SEC = 7200
 _TIMESTAMP_FORMAT = "%Y%m%d_%H%M%S"
 
 
@@ -83,22 +88,52 @@ def _masked_command(command: Sequence[str], secret_flags: Sequence[str]) -> str:
     return " ".join(masked)
 
 
-class BackupExecutor:
-    """Ejecuta el respaldo por base con el motor Firebird y reporta el resultado.
+def _database_target(database: DatabaseConfig) -> str:
+    """Identificador legible de la base para los logs, según el motor."""
+    if database.type is DbEngine.POSTGRESQL:
+        if database.host and database.dbname:
+            return f"{database.host}/{database.dbname}"
+        return database.dbname or database.host or ""
+    return database.connection or ""
 
-    El dispatch por ``databases[].type`` llega en el ticket 03; hoy el
-    protocolo ``Engine`` tiene una única vía (Firebird), con comportamiento
-    idéntico al histórico.
+
+class BackupExecutor:
+    """Ejecuta el respaldo por base con el motor de la entrada y reporta el resultado.
+
+    El dispatch por ``databases[].type`` (ticket 03) elige entre
+    ``FirebirdEngine`` y ``PostgreSQLEngine``; cada motor aporta su binario,
+    comando, extensión, patrones de error y variables de entorno. El timeout
+    es por motor: ``timeout`` (gbak) y ``pg_dump_timeout`` (pg_dump), con la
+    precedencia ``databases[].*_timeout_sec`` > valor del ejecutor (§3.7).
     """
 
     def __init__(
         self,
         gbak_path: str | Path | None = None,
         timeout: int = DEFAULT_GBACK_TIMEOUT_SEC,
+        pg_dump_path: str | Path | None = None,
+        pg_dump_timeout: int = DEFAULT_PG_DUMP_TIMEOUT_SEC,
     ) -> None:
         self.gbak_path = None if gbak_path is None else str(gbak_path)
         self.timeout = timeout
-        self._engine: Engine = FirebirdEngine(gbak_path)
+        self.pg_dump_path = None if pg_dump_path is None else str(pg_dump_path)
+        self.pg_dump_timeout = pg_dump_timeout
+        self._engines: dict[DbEngine, Engine] = {
+            DbEngine.FIREBIRD: FirebirdEngine(gbak_path),
+            DbEngine.POSTGRESQL: PostgreSQLEngine(pg_dump_path),
+        }
+
+    def _engine_for(self, db_config: DatabaseConfig | None) -> Engine:
+        """Motor según ``databases[].type`` (Firebird por defecto sin config)."""
+        if db_config is not None and db_config.type is DbEngine.POSTGRESQL:
+            return self._engines[DbEngine.POSTGRESQL]
+        return self._engines[DbEngine.FIREBIRD]
+
+    def _timeout_for(self, db_config: DatabaseConfig | None) -> int:
+        """Timeout efectivo del motor de la entrada."""
+        if db_config is not None and db_config.type is DbEngine.POSTGRESQL:
+            return self.pg_dump_timeout
+        return self.timeout
 
     def run_backup(
         self,
@@ -116,7 +151,8 @@ class BackupExecutor:
         start_time = time.perf_counter()
         target = Path(backup_path)
         binary_path: str | None = None
-        engine = self._engine
+        engine = self._engine_for(db_config)
+        timeout = self._timeout_for(db_config)
 
         try:
             binary_path = engine.resolve_binary(db_config)
@@ -132,16 +168,16 @@ class BackupExecutor:
                 command,
                 capture_output=True,
                 text=True,
-                timeout=self.timeout,
+                timeout=timeout,
                 env={**os.environ, **env} if env else None,
             )
-            self._check_completed(completed)
-            file_size = self._validate_backup_file(target)
+            self._check_completed(engine, completed)
+            file_size = self._validate_backup_file(engine, target)
         except subprocess.TimeoutExpired:
             return self._failure(
                 database_name,
                 start_time,
-                f"{engine.binary_name} excedió el timeout de {self.timeout} s",
+                f"{engine.binary_name} excedió el timeout de {timeout} s",
             )
         except OSError as exc:
             return self._failure(
@@ -209,24 +245,28 @@ class BackupExecutor:
         )
 
     def _backup_one(self, database: DatabaseConfig, work_dir: Path) -> BackupResult:
-        """Respalda una base, resolviendo su ``gbak_path`` y timeout propios."""
+        """Respalda una base, resolviendo su binario y timeout propios por motor."""
         timestamp = datetime.now().strftime(_TIMESTAMP_FORMAT)
-        backup_path = work_dir / f"{database.name}_{timestamp}{self._engine.extension}"
-        logger.info("Procesando base '%s' (%s)", database.name, database.connection)
+        engine = self._engine_for(database)
+        backup_path = work_dir / f"{database.name}_{timestamp}{engine.extension}"
+        logger.info("Procesando base '%s' (%s)", database.name, _database_target(database))
         executor = BackupExecutor(
             database.gbak_path or self.gbak_path,
             database.gbak_timeout_sec or self.timeout,
+            pg_dump_path=database.pg_dump_path or self.pg_dump_path,
+            pg_dump_timeout=database.pg_dump_timeout_sec or self.pg_dump_timeout,
         )
         # La validación de config exige ``connection`` para type=firebird; el
         # ``or ""`` es el fallback de tipos para un modelo sin validar.
         connection = database.connection or ""
         return executor.run_backup(database.name, connection, str(backup_path), database)
 
-    def _check_completed(self, completed: subprocess.CompletedProcess[str]) -> None:
+    def _check_completed(
+        self, engine: Engine, completed: subprocess.CompletedProcess[str]
+    ) -> None:
         """Falla si el binario devolvió código distinto de 0 o un patrón conocido."""
         stderr = completed.stderr or ""
         lowered = stderr.lower()
-        engine = self._engine
         if completed.returncode != 0 or any(
             pattern in lowered for pattern in engine.error_patterns
         ):
@@ -234,9 +274,9 @@ class BackupExecutor:
                 engine.binary_name, completed.returncode, completed.stdout or "", stderr
             )
 
-    def _validate_backup_file(self, path: Path) -> int:
+    def _validate_backup_file(self, engine: Engine, path: Path) -> int:
         """Valida el artefacto (existe, no vacío y legible) y devuelve su tamaño."""
-        binary_name = self._engine.binary_name
+        binary_name = engine.binary_name
         if not path.exists():
             raise EngineError(f"{binary_name} no generó el archivo de respaldo: {path}")
         try:
