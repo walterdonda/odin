@@ -29,3 +29,4 @@ del mapa, `resolved`).
 ## Decisions so far
 
 <!-- una línea por ticket resuelto: título con link y gist; el detalle vive en el ticket -->
+- [01: Configuración de dos motores + validate](issues/01-configuracion-dos-motores.md) — `type` obligatorio por entrada de `databases[]` (enum `DbEngine`), campos PostgreSQL con `_db_problems` (mensajes exactos §3.5), `_check_pg_dump_paths` en validate con filtro por `type`, `local.pg_dump_timeout_sec`; fixtures/ejemplos ganan `"type": "firebird"`. Gate completo en verde (pytest 676 passed; quick 5/5).
