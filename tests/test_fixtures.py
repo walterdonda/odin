@@ -176,6 +176,22 @@ def test_examples_are_valid_without_strict(name: str) -> None:
 # --- fixture mínimo: defaults ---
 
 
+def test_windows_service_smoke_config_declares_engine(tmp_path: Path) -> None:
+    """La config del smoke del servicio Windows parsea y declara su motor.
+
+    Guard de regresión cross-plataforma: el escenario real del SCM solo corre
+    en Windows con ``ODIN_WINDOWS_SERVICE_SMOKE=1`` (CI), así que un ``type``
+    ausente ahí no se detectaría en el gate Linux; este test lo clava en todas
+    las plataformas (el helper es puro Python y no importa pywin32).
+    """
+    from tests.test_service_windows_integration import _write_smoke_config
+
+    config = load_config(_write_smoke_config(tmp_path, smtp_port=2525))
+    assert config.databases[0].name == "erp_principal"
+    assert config.databases[0].type is DbEngine.FIREBIRD
+    assert config.databases[0].connection is not None
+
+
 def test_minimal_fixture_applies_defaults() -> None:
     config = load_config(FIXTURES / "config_minimal.json")
     # compression (sección omitida)

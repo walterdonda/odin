@@ -73,6 +73,7 @@ def _write_smoke_config(tmp_path: Path, *, smtp_port: int) -> Path:
         "databases": [
             {
                 "name": "erp_principal",
+                "type": "firebird",
                 "connection": "localhost/3050:C:\\Datos\\ERP\\erp.fdb",
                 "user": "SYSDBA",
                 "password": "masterkey",

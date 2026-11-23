@@ -292,6 +292,7 @@ def _build_config(
     config["databases"] = [
         {
             "name": "matrix50",
+            "type": "firebird",
             "connection": container.database_spec(),
             "user": CLEAN_USER,
             "password": CLEAN_PASSWORD,
