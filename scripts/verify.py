@@ -19,6 +19,13 @@ Pasos e ids:
 - ``validate-linux``    ``uv run odin validate --config examples/config.linux.json``
 - ``validate-windows``  ``uv run odin validate --config examples/config.windows.json``
 
+El gate completo (sin ``--quick``) necesita el **daemon de Docker corriendo**:
+los tests de integración levantan contenedores reales (``firebird`` y
+``postgres:18``) y el test de empaquetado instala el wheel en un contenedor
+limpio. Con el daemon caído ese último test falla (no se salta); si Docker no
+está disponible, corré el gate con ``--quick``, que omite los tests marcados
+``integration``.
+
 Todos los pasos seleccionados se ejecutan aunque uno falle (para tener el
 panorama completo en una sola corrida). Cada uno imprime el comando, su
 duración y su estado; los fallos listan todas las líneas ``FAILED``/``ERROR``

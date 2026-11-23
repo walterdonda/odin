@@ -105,6 +105,12 @@ uv run python scripts\verify.py --skip-sync --only pytest
 `--help` documenta los flags (`--skip-sync`, `--quick`, `--only <id>`; ids:
 `sync`, `pytest`, `ruff`, `mypy`, `validate-linux`, `validate-windows`).
 
+> **Docker**: el gate completo requiere el daemon de Docker corriendo — los
+> tests de integración levantan contenedores reales (`firebird`, `postgres:18`)
+> y el test de empaquetado instala el wheel en un contenedor limpio. Con el
+> daemon caído ese último test falla (no se salta); sin Docker disponible,
+> usá `--quick` para omitir los tests marcados `integration`.
+
 El ciclo de desarrollo completo se verifica con ese gate; `uv run odin
 --version` está incluido en el quickstart.
 
