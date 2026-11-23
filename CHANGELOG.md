@@ -5,6 +5,39 @@ Todos los cambios relevantes de ODIN se documentan en este archivo.
 El formato se basa en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/)
 y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
+## [Unreleased]
+
+Overhaul documental del soporte multi-motor (sin cambios de código):
+
+### Documentación
+
+- Nuevo [`docs/engines.md`](docs/engines.md): hub del **modelo multi-motor** —
+  dispatch por `databases[].type`, campos por motor, resolución de binarios,
+  artefactos y retención, secretos por motor, identificación en logs y una
+  guía breve para agregar un motor (protocolo `Engine`, finders, tests).
+- [`docs/postgresql.md`](docs/postgresql.md) pasa de "especificación y plan" a
+  **guía del motor PostgreSQL 18+**: se retira el lenguaje de plan ya
+  implementado y se consolidan las notas de restauración.
+- Nuevo [`docs/scheduler.md`](docs/scheduler.md): scheduler interno (estado,
+  recarga en caliente, solapamiento, misfire y demo) movido desde el README.
+- Nuevo [`docs/dependencies.md`](docs/dependencies.md): matriz de
+  compatibilidad Python 3.14 y la nota de la alpha de Windows, movidas desde
+  el README (elimina la duplicación interna del problema).
+- **README** adelgazado a overview + índice: una tabla por motor, comandos y
+  exit codes canónicos, operación resumida por tema con enlace a su doc dueño
+  e índice de documentación.
+- Correcciones de veracidad: ejemplos de `docs/firebird.md` con `type`
+  explícito (copiarlos tal cual rompía `odin validate`); clave privada de los
+  ejemplos de Ed25519 a **RSA** (único formato soportado); CI de **tres jobs**
+  en el README (faltaba `postgresql`); "passphrase obligatoria" → recomendada;
+  barrido de residuos single-engine (`.fbk`-only → `.fbk`/`.dump`) en
+  `configuration.md`, `security.md`, `service.md` y `examples/README.md` (que
+  no mencionaba PostgreSQL); referencias "sin efecto en 1.0.0" → wording
+  neutro; `remote_path` de los ejemplos a `/backups/odin/`; tildes en la
+  descripción de `pyproject.toml`; ancla rota en `security.md`; comentario
+  obsoleto ("sin remoto") en `.github/workflows/ci.yml`; `examples/README.md`
+  sin tablas duplicadas (defaults y exit codes viven en su doc canónico).
+
 ## 1.1.0 - 2026-11-22
 
 Segunda release menor: soporte **PostgreSQL 18.0+** como segundo motor de
@@ -84,7 +117,8 @@ comportamiento.
 
 Primera release estable: respaldo externo de bases Firebird 2.5 → 6 con
 `gbak`, compresión 7z, transferencia SFTP y notificación por correo, operable
-como servicio residente en Windows Server y Linux LTS.
+como servicio residente en Windows Server y Linux LTS. Documento histórico
+completo: [`docs/release-1.0.md`](docs/release-1.0.md).
 
 ### Añadido
 
