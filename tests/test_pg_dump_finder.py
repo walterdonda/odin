@@ -11,6 +11,7 @@ la existencia (sin verificación de versión en runtime, regla documentada en
 §2.5).
 """
 
+import os
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -94,7 +95,7 @@ class TestPgDumpFinder(unittest.TestCase):
             or Path(path).as_posix().startswith("/usr/lib/postgresql/")
         )
 
-        with patch.dict("os.environ", {"PATH": "/opt/other:/opt/pg/bin"}):
+        with patch.dict("os.environ", {"PATH": os.pathsep.join(("/opt/other", "/opt/pg/bin"))}):
             found = find_pg_dump()
 
         self.assertEqual(found.as_posix(), "/opt/pg/bin/pg_dump")
@@ -150,7 +151,7 @@ class TestPgDumpFinder(unittest.TestCase):
         # lista de candidatos.
         mock_exists.side_effect = lambda path: Path(path).as_posix() == "/opt/pg/bin/pg_dump"
 
-        with patch.dict("os.environ", {"PATH": "/opt/other:/opt/pg/bin"}):
+        with patch.dict("os.environ", {"PATH": os.pathsep.join(("/opt/other", "/opt/pg/bin"))}):
             found = find_pg_dump()
 
         self.assertEqual(found.as_posix(), "/opt/pg/bin/pg_dump")

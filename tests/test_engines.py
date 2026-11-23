@@ -114,8 +114,8 @@ def test_resolve_binary_prefers_executor_over_finder() -> None:
 def test_resolve_binary_auto_detects_and_caches() -> None:
     with patch("odin.engines.firebird.find_gbak", return_value=Path("/usr/bin/gbak")) as mock_find:
         engine = FirebirdEngine()
-        assert engine.resolve_binary() == "/usr/bin/gbak"
-        assert engine.resolve_binary() == "/usr/bin/gbak"
+        assert Path(engine.resolve_binary()) == Path("/usr/bin/gbak")
+        assert Path(engine.resolve_binary()) == Path("/usr/bin/gbak")
 
     assert mock_find.call_count == 1
 
@@ -268,8 +268,8 @@ def test_postgresql_resolve_binary_auto_detects_and_caches() -> None:
         "odin.engines.postgresql.find_pg_dump", return_value=Path(PG_DUMP)
     ) as mock_find:
         engine = PostgreSQLEngine()
-        assert engine.resolve_binary() == PG_DUMP
-        assert engine.resolve_binary() == PG_DUMP
+        assert Path(engine.resolve_binary()) == Path(PG_DUMP)
+        assert Path(engine.resolve_binary()) == Path(PG_DUMP)
 
     assert mock_find.call_count == 1
 
