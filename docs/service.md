@@ -4,9 +4,9 @@ ODIN puede correr desatendido como **servicio del sistema operativo**: un
 Windows Service (gestionado por el SCM) en Windows Server y una unit
 **systemd** en Linux LTS. El servicio ejecuta el **scheduler interno** del
 bloque `scheduler` del JSON: cada job dispara el pipeline completo (respaldo
-`gbak`, compresión 7z, transferencia SFTP, correo y retención local) según su
-expresión cron, **sin depender de `cron`, timers de systemd ni Task
-Scheduler**.
+del motor de cada base —`gbak` o `pg_dump`—, compresión 7z, transferencia
+SFTP, correo y retención local) según su expresión cron, **sin depender de
+`cron`, timers de systemd ni Task Scheduler**.
 
 - Comandos del ciclo de vida:
   `odin service install|uninstall|start|stop|status`.
@@ -38,9 +38,11 @@ Scheduler**.
    debe poder:
    - **leer** el JSON de configuración (permisos `600`/ACL del dueño),
    - **crear y escribir** `local.work_dir` y el directorio de logs,
-   - **ejecutar** `gbak` (o el binario indicado en `databases[].gbak_path`),
-   - alcanzar por red el servidor Firebird (3050/TCP o el puerto configurado),
-     los servidores SFTP (22/TCP) y el servidor SMTP.
+   - **ejecutar** `gbak`/`pg_dump` (o los binarios indicados en
+     `databases[].gbak_path`/`databases[].pg_dump_path`),
+   - alcanzar por red el servidor Firebird (3050/TCP) o PostgreSQL (5432/TCP)
+     —o el puerto configurado—, los servidores SFTP (22/TCP) y el servidor
+     SMTP.
 
    El detalle de permisos, claves SSH, políticas de host key y mínimo
    privilegio está en la guía de seguridad:
@@ -208,8 +210,10 @@ password= ...`), esa cuenta necesita:
 
 - lectura del JSON de configuración,
 - escritura en `local.work_dir` y en el directorio de logs,
-- ejecución de `gbak` (p. ej. `C:\Program Files\Firebird\Firebird_5_0\bin`),
-- acceso de red al Firebird, a los SFTP y al SMTP configurados.
+- ejecución de `gbak`/`pg_dump` (p. ej.
+  `C:\Program Files\Firebird\Firebird_5_0\bin` o
+  `C:\Program Files\PostgreSQL\18\bin`),
+- acceso de red a Firebird/PostgreSQL, a los SFTP y al SMTP configurados.
 
 La CLI no expone el flag de cuenta: `odin service install` instala con la
 cuenta por defecto. Para una cuenta dedicada, ajustá el servicio con las
@@ -331,6 +335,7 @@ proceso arranca igual con una advertencia y los `print` se descartan.
 | El servicio no encuentra la configuración | Unit escrita a mano con ruta relativa, o JSON movido después de instalar | Usar rutas **absolutas**; reinstalar con `odin service install --config <ruta absoluta>` |
 | `Permission denied` al crear `work_dir`/logs, o JSON ilegible | La cuenta del servicio no tiene permisos sobre esas rutas | Ajustar dueño/permisos (`chown`/ACL) al usuario que corre el servicio |
 | Ciclos con error de `gbak` | Cuenta sin acceso al binario, a la base Firebird o a la red (puerto 3050/firewall) | Probar `odin run --config ...` con esa cuenta; corregir `gbak_path`, permisos o firewall |
+| Ciclos con error de `pg_dump` | Cuenta sin acceso al binario, al servidor PostgreSQL o a la red (puerto 5432/firewall) | Probar `odin run --config ...` con esa cuenta; corregir `pg_dump_path`, permisos o firewall; ver [`docs/postgresql.md`](postgresql.md) |
 | Los jobs disparan a la hora equivocada | `scheduler.timezone` distinta de la esperada | Ajustar la zona IANA; `odin validate` muestra el próximo disparo por job |
 | No llegan los correos / falla SFTP | Salida SMTP/SFTP bloqueada por firewall/proxy | Probar con `odin run`; abrir los puertos de `notification.smtp` y `servers[].host/port` |
 | `systemctl` rechaza la unit | Sintaxis inválida o `ExecStart`/`WorkingDirectory` inexistentes | `systemd-analyze verify /etc/systemd/system/odin.service` |
@@ -371,7 +376,7 @@ del reinicio ante caída es la demo gated `ODIN_SERVICE_DEMO=1` de
 
 Estado de la **verificación en limpio en Windows Server** y cierre del
 **Item 009** (smoke multiplataforma). En este entorno de desarrollo solo hay
-Linux: no hay Windows Server ni remoto publicado, así que la corrida real
+Linux: no hay un Windows Server real disponible, así que la corrida real
 queda **delegada** al job `windows` de la CI (`.github/workflows/ci.yml`,
 Item 073) o al runbook de §8, con el mismo criterio de salvedades que las
 Etapas 5 y 7.
@@ -416,7 +421,7 @@ un Windows Server real. La primera corrida debe completar esta evidencia:
 |---|---|
 | Fecha / build del SO | _pendiente_ |
 | Versiones de `uv` y Python | _pendiente_ |
-| Firebird usado (real o fases dobles) | _pendiente_ |
+| Firebird/PostgreSQL usado (real o fases dobles) | _pendiente_ |
 | `odin validate` (exit code) | _pendiente_ |
 | `install`/`start`/`status`/`stop`/`uninstall` (salidas y exit codes) | _pendiente_ |
 | Estado del SCM: `Get-Service odin`, arranque automático y failure actions | _pendiente_ |

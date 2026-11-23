@@ -1,9 +1,8 @@
 # CI multiplataforma de ODIN (Item 073).
 #
-# Lista para habilitar al publicar el repositorio: hoy no hay remoto, así que
-# este workflow no se ha ejecutado todavía (ver "Integración continua" del
-# README y docs/service.md §9). No usa secretos y solo necesita permiso de
-# lectura del contenido.
+# Se ejecuta en `push`/`pull_request` (ver "Integración continua" del README y
+# docs/service.md §9). No usa secretos y solo necesita permiso de lectura del
+# contenido.
 #
 # El gate de cada job es `scripts/verify.py` (Item 071), el mismo que corre
 # localmente: `uv sync` -> pytest -> ruff -> mypy -> `odin validate` de los dos

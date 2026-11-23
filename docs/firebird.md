@@ -11,7 +11,8 @@ ejecutar la matriz de integración (`tests/test_firebird_matrix.py`, Item 069).
   servidor**. En hosts con varias instalaciones Firebird, indicá
   `databases[].gbak_path` por base.
 - Guía relacionada: [`docs/service.md`](service.md) (cuenta del servicio y
-  accesos al binario) y el [README](../README.md#ejecución-de-respaldos-odin-run).
+  accesos al binario), [`docs/engines.md`](engines.md) (el modelo multi-motor)
+  y el [README](../README.md#comandos).
 
 ---
 
@@ -64,7 +65,7 @@ auto-detección elige **una** y no puede adivinar por base; fijá
 
 ## 3. `gbak_path`: auto-detección y override
 
-Precedencia (implementada en `src/odin/backup.py`):
+Precedencia (implementada en el protocolo `Engine` de `src/odin/engines/`):
 
 1. `databases[].gbak_path` explícito en el JSON.
 2. `gbak_path` del ejecutor (`BackupExecutor`, uso programático).
@@ -94,7 +95,7 @@ matriz.
 
 | Situación | Severidad | Mensaje |
 |---|---|---|
-| `gbak_path: null` | INFO | "es null; se auto-detectará según SO y versión de Firebird" |
+| `gbak_path: null` | INFO | "es null; se auto-detectará según SO y versión de Firebird (Etapa 2)" |
 | Ruta de otro SO (p. ej. `C:\…` en Linux) | — | se omite con nota (OS-agnóstico) |
 | Es un directorio | ERROR | "se esperaba el ejecutable gbak" |
 | No existe | WARNING | "el respaldo de esta base fallará" |
@@ -108,6 +109,7 @@ Ejemplos por plataforma:
 "databases": [
   {
     "name": "erp_principal",
+    "type": "firebird",
     "connection": "localhost/3050:/var/lib/firebird/data/erp.fdb",
     "user": "SYSDBA",
     "password": "***",
@@ -122,6 +124,7 @@ Ejemplos por plataforma:
 "databases": [
   {
     "name": "erp_principal",
+    "type": "firebird",
     "connection": "localhost/3050:C:\\Datos\\ERP\\erp.fdb",
     "user": "SYSDBA",
     "password": "***",
@@ -230,6 +233,6 @@ Las convenciones de las imágenes (variables, rutas de binarios/datos y helper
 
 - Matriz ejecutable: `tests/test_firebird_matrix.py` (Item 069).
 - Helper de contenedores: `tests/firebird_container.py`.
-- Resolución del binario: `src/odin/gbak_finder.py` y `src/odin/backup.py`.
+- Resolución del binario: `src/odin/gbak_finder.py` y `src/odin/engines/`.
 - Guía del modo residente y cuenta del servicio: [`docs/service.md`](service.md).
 - Configuración y operación: [README](../README.md).

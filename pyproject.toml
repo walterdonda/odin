@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "odin"
 version = "1.1.0"
-description = "Respaldo externo de bases de datos Firebird (2.5-6) y PostgreSQL (18+): backup con gbak/pg_dump, compresion 7z, transferencia SFTP con paramiko y notificacion por correo."
+description = "Respaldo externo de bases de datos Firebird (2.5-6) y PostgreSQL (18+): backup con gbak/pg_dump, compresión 7z, transferencia SFTP con paramiko y notificación por correo."
 readme = "README.md"
 requires-python = ">=3.14"
 license = "MIT"

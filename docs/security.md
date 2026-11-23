@@ -23,10 +23,10 @@ de rutas) y [`examples/README.md`](../examples/README.md).
 
 | Activo | Dónde vive | Impacto si se filtra |
 |---|---|---|
-| Credenciales Firebird (`databases[].user`/`password`) | JSON de configuración | Acceso total a las bases respaldadas |
+| Credenciales de bases (`databases[].user`/`password`), Firebird y PostgreSQL | JSON de configuración | Acceso total a las bases respaldadas |
 | Credenciales SFTP (`servers[].auth`) y passphrase de la clave | JSON + clave privada en disco | Acceso al servidor de respaldos y a todas sus copias |
 | Credenciales SMTP (`notification.smtp`) | JSON | Uso del relé para correo no deseado / suplantación |
-| Contenido de los respaldos (`.fbk` y `.fbk.7z`) | `local.work_dir` y servidores SFTP | Los datos completos de la base |
+| Contenido de los respaldos (`.fbk`/`.dump` y sus `.7z`) | `local.work_dir` y servidores SFTP | Los datos completos de la base |
 | Configuración (rutas, horarios, destinos) | JSON y `scheduler_state.json` | Reconocimiento para un ataque dirigido |
 
 ### Superficie de amenaza
@@ -36,9 +36,9 @@ de rutas) y [`examples/README.md`](../examples/README.md).
 - **Otro proceso o servicio del host**: ídem; el log y el estado suelen quedar
   legibles con el umask por defecto.
 - **Acceso físico o copia de seguridad del host**: un disco o backup del host
-  incluye el JSON y los `.fbk`.
+  incluye el JSON y los artefactos de respaldo.
 - **Red**: intercepción o manipulación de SFTP, SMTP y de la conexión a
-  Firebird.
+  Firebird o PostgreSQL.
 - **Error operativo**: versionar el JSON real, compartirlo por chat/correo o
   dejarlo con permisos abiertos.
 
@@ -61,12 +61,13 @@ enmascarado, rotación— y son el resto de esta guía.
 
 ### Qué no cubre ODIN
 
-- No cifra el JSON ni los respaldos (el cifrado AES-256 de `.fbk.7z` es
-  opcional y protege el artefacto, no la configuración).
+- No cifra el JSON ni los respaldos (el cifrado AES-256 del artefacto
+  comprimido es opcional y protege el artefacto, no la configuración).
 - No es un gestor de secretos ni rota credenciales por sí solo.
 - No verifica el certificado TLS del servidor SMTP (ver
   [`§6`](#6-correo-tls-y-ssl)).
-- No autentica la conexión a Firebird más allá de lo que hace `gbak`.
+- No autentica la conexión a las bases más allá de lo que hacen `gbak` y
+  `pg_dump`.
 
 ---
 
@@ -114,8 +115,8 @@ Notas:
 - Dé a la cuenta del servicio **solo lectura** (`:(R)`); el archivo no
   necesita escritura en operación normal.
 - La instalación por defecto del servicio usa `LocalSystem`
-  ([`docs/service.md` §4](service.md)); si usa una cuenta dedicada, su ACL es
-  la que importa.
+  ([`docs/service.md` §4](service.md#4-windows-server)); si usa una cuenta
+  dedicada, su ACL es la que importa.
 
 ### Control de versiones y copias
 
@@ -179,7 +180,7 @@ ssh-copy-id -i ~/.ssh/odin_backup.pub odin@servidor-destino   # o copie la .pub 
     "private_key": "~/.ssh/odin_backup",
     "passphrase": "***"
   },
-  "remote_path": "/srv/backups/firebird/",
+  "remote_path": "/srv/backups/odin/",
   "host_key_policy": "strict"
 }
 ```
@@ -254,9 +255,14 @@ destino de salida:
 
 Ninguna barrera de enmascarado es perfecta; estos límites son conocidos:
 
-1. **`gbak -password` en la lista de procesos**: mientras corre el respaldo, la
-   contraseña de la base aparece como argumento del proceso `gbak` y puede
-   verse con `ps -ef`, `htop` o el Administrador de tareas. Mitigaciones:
+1. **Credenciales de base en la lista de procesos (Firebird) y en el entorno
+   (PostgreSQL)**: mientras corre el respaldo, la contraseña de la base aparece
+   como argumento del proceso `gbak` (`-password`, visible con `ps -ef`, `htop`
+   o el Administrador de tareas). En PostgreSQL la contraseña viaja **solo** en
+   el entorno del subproceso (`PGPASSWORD`), nunca en argv ni en logs; el
+   entorno también puede leerse con los permisos adecuados
+   (`/proc/<pid>/environ`), así que la exposición es menor pero no nula.
+   Mitigaciones:
    - correr el servicio con una **cuenta dedicada** y restringir quién puede
      listar procesos del host;
    - en Linux, montar `/proc` con `hidepid=2` (u opciones equivalentes) para
@@ -267,8 +273,8 @@ Ninguna barrera de enmascarado es perfecta; estos límites son conocidos:
    son la única barrera.
 3. **Los respaldos contienen los datos completos**: `work_dir` y los destinos
    SFTP merecen los mismos permisos y cifrado de disco que la base de origen;
-   `compression.password` es opcional y protege el `.fbk.7z` en tránsito y en
-   reposo.
+   `compression.password` es opcional y protege el artefacto comprimido
+   (`.fbk.7z`/`.dump.7z`) en tránsito y en reposo.
 4. **El enmascarado es literal**: reemplaza el valor exacto del secreto. Si un
    secreto se transforma (codificación, URL, trozo) antes de aparecer en un
    mensaje, puede no coincidir; por eso `odin validate` y la revisión de
@@ -313,9 +319,9 @@ La cuenta que corre el servicio debe tener exactamente lo necesario:
 |---|---|
 | Lectura del JSON | Cargar la configuración |
 | Lectura de la clave privada SFTP y `known_hosts` | Autenticación SSH |
-| Escritura en `local.work_dir` y el directorio de logs | `.fbk`, `.fbk.7z`, `odin.log`, `scheduler_state.json` |
-| Ejecución de `gbak` (o el binario de `gbak_path`) | Respaldo |
-| Acceso de red a Firebird, SFTP y SMTP | Pipeline |
+| Escritura en `local.work_dir` y el directorio de logs | `.fbk`/`.dump` (y sus `.7z`), `odin.log`, `scheduler_state.json` |
+| Ejecución de `gbak`/`pg_dump` (o los binarios de `gbak_path`/`pg_dump_path`) | Respaldo |
+| Acceso de red a Firebird/PostgreSQL, SFTP y SMTP | Pipeline |
 
 No necesita escritura sobre el JSON ni permisos de administrador (excepto para
 instalar/desinstalar el servicio, que es una operación puntual).
@@ -344,8 +350,9 @@ una cuenta dedicada, concédale:
 
 ### Red
 
-- Firebird en 3050/TCP (o el configurado), SFTP en 22/TCP y SMTP en el puerto
-  del bloque `notification.smtp`, solo desde el host del servicio.
+- Firebird en 3050/TCP y PostgreSQL en 5432/TCP (o los configurados), SFTP en
+  22/TCP y SMTP en el puerto del bloque `notification.smtp`, solo desde el host
+  del servicio.
 - Restrinja el origen del SFTP y del SMTP a la IP del servidor de respaldos
   cuando su infraestructura lo permita.
 
@@ -364,8 +371,8 @@ una cuenta dedicada, concédale:
       local de confianza).
 - [ ] Cuenta del servicio dedicada y sin login interactivo, con solo los
       permisos de [`§7`](#7-mínimo-privilegio-de-la-cuenta-del-servicio).
-- [ ] `compression.password` si los `.fbk.7z` pasan por redes o discos
-      compartidos.
+- [ ] `compression.password` si los artefactos comprimidos pasan por redes o
+      discos compartidos.
 - [ ] `odin validate --config …` sin ERRORES y sin las ADVERTENCIAS evitables
       (permisos, SMTP sin cifrar, `host_key_policy: insecure`, retención
       desactivada sin querer).
@@ -379,9 +386,9 @@ una cuenta dedicada, concédale:
 ODIN permite cambiar credenciales sin detener el servicio: edite el JSON y pida
 la recarga en caliente.
 
-1. **Credenciales Firebird** (`databases[].password` o `user`): cámbielas en el
-   servidor Firebird, actualice el JSON, `odin validate` y
-   `odin service reload`.
+1. **Credenciales de bases** (`databases[].user`/`password`, Firebird o
+   PostgreSQL): cámbielas en el servidor de la base, actualice el JSON,
+   `odin validate` y `odin service reload`.
 2. **Contraseña SFTP**: cámbiela en el servidor, actualice el JSON y recargue.
 3. **Clave SSH**: genere el par nuevo, autorice la pública, actualice
    `private_key`/`passphrase`, recargue y retire la clave anterior
@@ -389,7 +396,7 @@ la recarga en caliente.
 4. **Contraseña SMTP**: cámbiela en el relé, actualice el JSON y recargue; el
    próximo informe usa la credencial nueva.
 5. **Passphrase de compresión** (`compression.password`): al cambiarla, los
-   `.fbk.7z` nuevos usan la nueva; conserve la anterior mientras existan
+   artefactos nuevos usan la nueva; conserve la anterior mientras existan
    archivos viejos cifrados con ella (los archivos no se recifran).
 
 En todos los casos:

@@ -7,9 +7,10 @@ comportamiento de consumo corresponde a la versión **1.1.0**.
 
 - Guía rápida y operación: [`README.md`](../README.md#configuración).
 - Ejemplos listos para copiar: [`examples/`](../examples/).
+- Modelo multi-motor (dispatch, finders, protocolo): [`docs/engines.md`](engines.md).
 - Permisos, claves SSH y host keys: [`docs/security.md`](security.md).
 - Resolución de `gbak` por versión: [`docs/firebird.md`](firebird.md).
-- Especificación y notas de restauración del soporte PostgreSQL: [`docs/postgresql.md`](postgresql.md).
+- Guía del motor PostgreSQL y notas de restauración: [`docs/postgresql.md`](postgresql.md).
 - Scheduler y servicio residente: [`docs/service.md`](service.md).
 
 > **Nota de alcance:** esta referencia describe lo que el código hace hoy,
@@ -195,7 +196,7 @@ eligen subconjuntos por `name`.
   de Firebird. La guía de Firebird cubre la regla de familia de `gbak`.
 - **PostgreSQL.** El dump es lógico por base (`pg_dump`, formato custom, solo
   serie 18.0+); `dbname` es el nombre real de la base y `host`/`port` apuntan
-  al servidor. Detalle, restricciones y plan en
+  al servidor. Detalle y restricciones en
   [`docs/postgresql.md`](postgresql.md).
 - **Timeout.** La precedencia es `databases[].*_timeout_sec` y, si es `null`,
   el `local.*_timeout_sec` del motor. El valor efectivo debe ser mayor que
@@ -242,7 +243,7 @@ El bloque es opcional. Si se omite, se usan `level: 7` y `password: null`.
 | Campo | Tipo | Obligatorio | Default | Reglas y efecto |
 |---|---|---|---|---|
 | `level` | `integer` | No | `7` | Entero entre `0` y `9`. `0` = sin compresión (*store*); `1–9` = LZMA2 con `preset` igual al nivel. Mayor nivel = más compresión, más CPU y más memoria. |
-| `password` | `string \| null` | No | `null` | Si es un texto no vacío, el contenido del `.fbk.7z` se cifra con 7zAES (AES-256). Si es `null` o se omite, no hay cifrado. Se enmascara. |
+| `password` | `string \| null` | No | `null` | Si es un texto no vacío, el contenido del artefacto comprimido (`.fbk.7z` o `.dump.7z`) se cifra con 7zAES (AES-256). Si es `null` o se omite, no hay cifrado. Se enmascara. |
 
 ### Notas
 
@@ -254,8 +255,9 @@ El bloque es opcional. Si se omite, se usan `level: 7` y `password: null`.
   (habitualmente `lzma.LZMAError` o `EOFError`) en lugar de devolver los bytes
   originales.
 - Nivel `0` no desactiva la creación del `.7z`: genera un archivo 7z en modo
-  *store* (sin compresión), no un `.fbk` sin empaquetar.
-- La salida se nombra `<name>_<timestamp>.fbk.7z`.
+  *store* (sin compresión), no un `.fbk`/`.dump` sin empaquetar.
+- La salida se nombra `<name>_<timestamp>.<ext>.7z` (`.fbk.7z` para Firebird,
+  `.dump.7z` para PostgreSQL).
 
 ```json
 {
@@ -279,7 +281,7 @@ error.
 | `port` | `integer` | Sí | — | Entero entre `1` y `65535`. |
 | `username` | `string` | Sí | — | No vacío. Usuario SSH/SFTP. |
 | `auth` | `object` | Sí | — | Objeto de autenticación; ver tabla siguiente. |
-| `remote_path` | `string` | Sí | — | No vacío. Directorio remoto POSIX donde se publican los `.fbk.7z`. Se crea de forma recursiva si no existe. Se recomienda **ruta absoluta** y `/` como separador. |
+| `remote_path` | `string` | Sí | — | No vacío. Directorio remoto POSIX donde se publican los artefactos comprimidos (`.fbk.7z`/`.dump.7z`). Se crea de forma recursiva si no existe. Se recomienda **ruta absoluta** y `/` como separador. |
 | `host_key_policy` | `string` | No | `"strict"` | `strict`, `known_hosts`, `accept-new` o `insecure`; ver más abajo. |
 | `sftp_retries` | `integer` | No | `3` | Entero `>= 0`, pero el ejecutor exige **al menos `1`**. Es la cantidad de **intentos totales** por conexión y subida, no reintentos adicionales. |
 | `sftp_connect_timeout_sec` | `integer` | No | `30` | Entero `>= 1`. Timeout de la conexión SSH. |
@@ -349,7 +351,7 @@ están en [`docs/security.md`](security.md#4-políticas-de-host-key).
 
 - Se usa como directorio remoto: el archivo se publica en
   `posixpath.join(remote_path, nombre_del_archivo)`.
-- Se recomienda una ruta **absoluta** (`/backups/firebird/`). Con una ruta
+- Se recomienda una ruta **absoluta** (`/backups/odin/`). Con una ruta
   relativa, la creación recursiva de directorios la interpreta desde la raíz
   `/`, que puede no coincidir con el directorio relativo al home del usuario
   SSH usado para subir el archivo.
@@ -365,7 +367,7 @@ están en [`docs/security.md`](security.md#4-políticas-de-host-key).
     "method": "password",
     "password": "***"
   },
-  "remote_path": "/backups/firebird/",
+  "remote_path": "/backups/odin/",
   "host_key_policy": "strict",
   "sftp_retries": 3,
   "sftp_connect_timeout_sec": 30,
@@ -442,7 +444,7 @@ están en [`docs/security.md`](security.md#4-políticas-de-host-key).
 
 | Campo | Tipo | Obligatorio | Default | Reglas y efecto |
 |---|---|---|---|---|
-| `work_dir` | `string` | Sí | — | No vacío. Directorio local de artefactos y estado. Se crea si no existe. Contiene los `.fbk`, los `.fbk.7z`, `scheduler_state.json` y el archivo de control de recarga. |
+| `work_dir` | `string` | Sí | — | No vacío. Directorio local de artefactos y estado. Se crea si no existe. Contiene los artefactos de respaldo (`.fbk`/`.dump` y sus `.7z`), `scheduler_state.json` y el archivo de control de recarga. |
 | `retention_days` | `integer` | Sí | — | Entero `>= 0`. `0` deshabilita la limpieza; `N > 0` elimina los artefactos gestionados con más de N días de antigüedad. |
 | `log_level` | `string` | No | `"INFO"` | `DEBUG`, `INFO`, `WARNING` o `ERROR`. Controla el archivo y la consola. |
 | `log_dir` | `string \| null` | No | `null` | Directorio del `odin.log`. Si es `null` o se omite, se usa `<work_dir>/logs`. |
@@ -566,7 +568,7 @@ está disponible el modo one-shot (`odin run`).
 ```
 
 Más detalle de operación, estado y recarga:
-[`docs/service.md`](service.md).
+[`docs/scheduler.md`](scheduler.md) y [`docs/service.md`](service.md).
 
 ---
 
@@ -637,7 +639,7 @@ odin validate --config /etc/odin/config.json --strict
 ```
 
 Los exit codes completos están en el
-[README](../README.md#exit-codes).
+[README](../README.md#comandos).
 
 ---
 
@@ -713,7 +715,7 @@ idéntico.
         "method": "password",
         "password": "***"
       },
-      "remote_path": "/backups/firebird/",
+      "remote_path": "/backups/odin/",
       "host_key_policy": "strict",
       "sftp_retries": 3,
       "sftp_connect_timeout_sec": 30,
@@ -731,7 +733,7 @@ idéntico.
         "private_key": "~/.ssh/id_rsa",
         "passphrase": null
       },
-      "remote_path": "/srv/backups/firebird/",
+      "remote_path": "/srv/backups/odin/",
       "host_key_policy": "known_hosts",
       "sftp_retries": 5,
       "sftp_connect_timeout_sec": 30,

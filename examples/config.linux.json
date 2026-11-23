@@ -33,15 +33,15 @@
       "port": 22,
       "username": "odin",
       "auth": { "method": "password", "password": "***" },
-      "remote_path": "/backups/firebird/"
+      "remote_path": "/backups/odin/"
     },
     {
       "name": "sitio-alterno-2",
       "host": "backup.example.com",
       "port": 2222,
       "username": "odin",
-      "auth": { "method": "key", "private_key": "~/.ssh/id_ed25519", "passphrase": null },
-      "remote_path": "/srv/backups/firebird/"
+      "auth": { "method": "key", "private_key": "~/.ssh/id_rsa", "passphrase": null },
+      "remote_path": "/srv/backups/odin/"
     }
   ],
   "notification": {
