@@ -1,15 +1,15 @@
-# Soporte PostgreSQL 18+ — especificación y plan de implementación
+# Guía del motor PostgreSQL 18+ (`pg_dump`)
 
-> **Estado:** especificación y plan **aprobados** en el mapa wayfinder
-> `soporte-postgresql` (ticket 04, `.scratch/soporte-postgresql/`) e
-> **implementados** en la versión **1.1.0** (tickets 01–06 del mapa de
-> implementación, `.scratch/soporte-postgresql-impl/`): el contrato de
-> configuración (§3), el engine `pg_dump` (§2, §5), la retención `.dump`, la
-> CLI y la CI de integración ya están activos en el código. Los tickets del
-> mapa contienen el detalle y las reversiones de decisiones; acá está la
-> versión consolidada y definitiva.
+> **Estado:** implementado en la versión **1.1.0**. Esta guía es la versión
+> consolidada del soporte PostgreSQL: el contrato de configuración (§3), el
+> engine `pg_dump` (§2, §5), la retención `.dump`, la CLI y la CI de
+> integración ya están activos en el código. Los tickets del mapa wayfinder
+> `soporte-postgresql` (`.scratch/soporte-postgresql/` y
+> `.scratch/soporte-postgresql-impl/`) contienen el detalle y las reversiones
+> de decisiones originales.
 
 - Guía de compatibilidad Firebird (el motor existente): [`docs/firebird.md`](firebird.md).
+- El modelo multi-motor (dispatch, finders, protocolo `Engine`): [`docs/engines.md`](engines.md).
 - Referencia de configuración (ambos motores): [`docs/configuration.md`](configuration.md).
 
 ---
@@ -383,42 +383,14 @@ Resuelto en el ticket 03.
 ### 7.3 CI
 
 - Job de integración PostgreSQL en `ubuntu-latest` contra `postgres:18`
-  (`.github/workflows/ci.yml`); actualizar `tests/test_ci_workflow.py`.
-- Gate `scripts/verify.py` **intacto** (sus pasos siguen siendo los mismos;
-  los examples ganan la entrada PostgreSQL recién cuando el parser la acepte).
+  (`.github/workflows/ci.yml`), cubierto por `tests/test_ci_workflow.py`.
+- Gate `scripts/verify.py` **intacto**: sus pasos son los mismos; los examples
+  incluyen la entrada PostgreSQL y el gate `validate-*` los valida.
 
 ---
 
-## 8. Plan de implementación (orden de trabajo)
+## 8. Criterios de aceptación (cumplidos en 1.1.0)
 
-Cada paso cierra con el gate local (`scripts/verify.py`) en verde. Antes de
-editar cualquier símbolo correr el análisis de impacto de GitNexus
-(`impact({target: "símbolo", direction: "upstream"})`) y
-`detect_changes` antes de cada commit (reglas de `AGENTS.md`).
-
-1. **`src/odin/config.py`** — `type` (enum `DbEngine`, requerido), campos
-   PostgreSQL, `local.pg_dump_timeout_sec`, `_db_problems`, `iter_secret_fields`
-   intacto.
-2. **`src/odin/engines/`** — paquete con `Engine`, `firebird.py`,
-   `postgresql.py`, excepciones neutras.
-3. **`src/odin/backup.py`** — `BackupExecutor` genérico (dispatch por engine,
-   env, `secret_flags`, paths por motor); renombrar excepciones a las neutras.
-4. **`src/odin/pg_dump_finder.py`** — espejo con rutas de §2.6 y regla ≥ 18.
-5. **`src/odin/retention.py`** — regex `.fbk|.dump`.
-6. **`src/odin/cli.py`** — descripción raíz y helps generales.
-7. **`src/odin/validate.py`** — `_check_pg_dump_paths`, filtro por `type`.
-8. **Tests unitarios** de §7.1 (nuevos y ampliados).
-9. **`tests/postgres_container.py` + integración** de §7.2.
-10. **CI** — job PostgreSQL + `tests/test_ci_workflow.py`.
-11. **Docs y ejemplos** — actualizar `docs/configuration.md` (contrato de §3
-    con nota de estado), `README.md` (descripción, requisitos, resumen de
-    campos), `CHANGELOG.md` y `examples/config.{linux,windows}.json` (entrada
-    `type` en las bases Firebird; la entrada PostgreSQL se suma acá, cuando el
-    parser ya la acepta y el gate `validate-*` sigue en verde).
-12. **Publicación** — versión menor nueva (1.1.0), descripción del paquete
-    (`pyproject.toml`) y keywords.
-
-Criterios de aceptación: el gate completo pasa en Linux y Windows; la matriz
-Firebird existente sigue verde; el flujo de integración PostgreSQL respalda un
-contenedor `postgres:18` real y el `.dump.7z` resultante existe y no está
-vacío.
+El gate completo pasa en Linux y Windows; la matriz Firebird existente sigue
+verde; el flujo de integración PostgreSQL respalda un contenedor `postgres:18`
+real y el `.dump.7z` resultante existe y no está vacío.
