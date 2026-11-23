@@ -24,7 +24,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 from odin.cli import ENV_CONFIG_VAR, EXIT_OK, main
-from odin.config import AuthMethod, ConfigError, HostKeyPolicy, LogLevel, load_config
+from odin.config import AuthMethod, ConfigError, DbEngine, HostKeyPolicy, LogLevel, load_config
 from odin.log import LOGGER_NAME
 from odin.validate import validate_config
 
@@ -88,6 +88,7 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_examples_load_and_match_vision_structure(name: str) -> None:
     config = load_config(EXAMPLES / name)
     assert config.databases[0].name == "nombre_clave_sistema"
+    assert config.databases[0].type is DbEngine.FIREBIRD
     assert config.databases[0].charset == "ISO8859_1"
     assert len(config.servers) == 2
     assert config.servers[0].auth.method is AuthMethod.PASSWORD
@@ -97,6 +98,29 @@ def test_examples_load_and_match_vision_structure(name: str) -> None:
     assert config.scheduler.enabled is True
     assert config.scheduler.timezone == "America/Argentina/Buenos_Aires"
     assert config.scheduler.jobs[0].schedule == "0 2 * * *"
+
+
+@pytest.mark.parametrize("name", EXAMPLE_NAMES)
+def test_examples_postgresql_entry_matches_contract(name: str) -> None:
+    """La entrada PostgreSQL de los ejemplos refleja el contrato de dos motores.
+
+    Segunda base con ``type`` explícito y los campos del motor (§3.4 de
+    ``docs/postgresql.md``); ``pg_dump_path: null`` delega la auto-detección,
+    espejo de ``gbak_path: null`` en la entrada Firebird.
+    """
+    config = load_config(EXAMPLES / name)
+    assert len(config.databases) == 2
+    pg = config.databases[1]
+    assert pg.name == "ventas_pg"
+    assert pg.type is DbEngine.POSTGRESQL
+    assert pg.host == "db.example.com"
+    assert pg.port == 5432
+    assert pg.dbname == "ventas"
+    assert pg.user == "odin_backup"
+    assert pg.password == "***"
+    assert pg.pg_dump_path is None
+    assert pg.pg_dump_timeout_sec is None
+    assert config.scheduler.jobs[0].databases == ["nombre_clave_sistema", "ventas_pg"]
 
 
 @pytest.mark.parametrize("name", EXAMPLE_NAMES)
@@ -176,10 +200,13 @@ def test_minimal_fixture_applies_defaults() -> None:
     assert config.local.resolved_log_dir == config.local.work_dir / "logs"
     # database (campos opcionales omitidos)
     db = config.databases[0]
+    assert db.type is DbEngine.FIREBIRD
     assert db.role is None
     assert db.charset is None
     assert db.gbak_path is None
     assert db.gbak_timeout_sec is None
+    assert db.pg_dump_path is None
+    assert db.pg_dump_timeout_sec is None
 
 
 # --- fixtures de error: field_path específicos ---

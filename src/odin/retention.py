@@ -1,16 +1,18 @@
 """Retención local (F8, Item 045): limpieza de respaldos gestionados por ODIN.
 
 Política: cuando ``local.retention_days`` es mayor que cero, ``odin run``
-elimina de ``work_dir`` los artefactos ``<nombre_bd>_<timestamp>.fbk`` y
-``<nombre_bd>_<timestamp>.fbk.7z`` (timestamp ``%Y%m%d_%H%M%S``, la
-convención de nombres de ``odin.backup``) cuya antigüedad supere N días según
-``mtime``. Con ``retention_days == 0`` la limpieza queda deshabilitada.
+elimina de ``work_dir`` los artefactos ``<nombre_bd>_<timestamp>.fbk`` o
+``<nombre_bd>_<timestamp>.dump`` (timestamp ``%Y%m%d_%H%M%S``, la convención
+de nombres de ``odin.backup``) y su comprimido ``.7z`` cuya antigüedad supere
+N días según ``mtime``. Con ``retention_days == 0`` la limpieza queda
+deshabilitada.
 
 Seguridad (solo se toca lo que es de ODIN):
 
 - Solo archivos **regulares** cuyo nombre cumpla la convención; un
   subdirectorio, un symlink o un archivo ajeno (``config.json``,
-  ``odin.log``, ``notas.fbk.txt``) nunca se examina ni se borra.
+  ``odin.log``, ``notas.fbk.txt``, ``notas.dump.txt``) nunca se examina ni se
+  borra.
 - El path resuelto debe quedar dentro de ``work_dir`` (defensa extra frente a
   ``..`` inesperados); no se siguen symlinks.
 - Los artefactos recién creados por la corrida actual quedan excluidos aunque
@@ -42,7 +44,7 @@ __all__ = [
     "is_managed_backup",
 ]
 
-_MANAGED_BACKUP_RE = re.compile(r"^.+_\d{8}_\d{6}\.fbk(?:\.7z)?$")
+_MANAGED_BACKUP_RE = re.compile(r"^.+_\d{8}_\d{6}\.(?:fbk|dump)(?:\.7z)?$")
 _SECONDS_PER_DAY = 86400.0
 
 
@@ -50,8 +52,9 @@ def is_managed_backup(name: str) -> bool:
     """True si ``name`` cumple la convención de artefactos de ODIN.
 
     La convención la fija ``odin.backup``: ``<nombre_bd>_<timestamp>.fbk``
-    (con ``timestamp = %Y%m%d_%H%M%S``) y su comprimido ``.fbk.7z``. Todo lo
-    demás (config, logs, notas, directorios) es ajeno y no se toca.
+    (Firebird) o ``<nombre_bd>_<timestamp>.dump`` (PostgreSQL) — con
+    ``timestamp = %Y%m%d_%H%M%S`` — y su comprimido ``.7z``. Todo lo demás
+    (config, logs, notas, directorios) es ajeno y no se toca.
     """
     return _MANAGED_BACKUP_RE.match(name) is not None
 

@@ -122,6 +122,22 @@ LOG_DIR = "config.local.log_dir"
 MIN_FREE_MB = "config.local.min_free_mb"
 PRIVATE_KEY = "config.servers[1].auth.private_key"
 GBAK_PATH = "config.databases[0].gbak_path"
+PG_DUMP_PATH = "config.databases[0].pg_dump_path"
+
+
+def _postgresql_entry(data: dict[str, Any]) -> None:
+    """Reemplaza la base del fixture por una entrada PostgreSQL válida."""
+    data["databases"][0] = {
+        "name": "erp_principal",
+        "type": "postgresql",
+        "host": "db.example.com",
+        "port": 5432,
+        "dbname": "erp",
+        "user": "odin_backup",
+        "password": "masterkey",
+        "pg_dump_path": None,
+        "pg_dump_timeout_sec": None,
+    }
 
 
 # --- reporte base ---
@@ -436,6 +452,80 @@ def test_windows_flavor_gbak_path_is_omitted_on_posix_host(tmp_path: Path) -> No
     report = validate_config(_config(tmp_path, mutate=mutate), host_is_windows=False)
     assert _severities(report, GBAK_PATH) == [Severity.INFO]
     assert "verificación omitida" in _messages(report, GBAK_PATH)
+
+
+# --- pg_dump_path ---
+
+
+def test_pg_dump_path_null_is_info_and_gbak_check_skipped(tmp_path: Path) -> None:
+    report = validate_config(_config(tmp_path, mutate=_postgresql_entry))
+    assert _severities(report, PG_DUMP_PATH) == [Severity.INFO]
+    assert "auto-detectará" in _messages(report, PG_DUMP_PATH)
+    assert _of(report, PG_DUMP_PATH)[0].check == "pg_dump_autodetect"
+    assert not _of(report, GBAK_PATH)
+
+
+def test_pg_dump_path_check_skipped_for_firebird_entry(tmp_path: Path) -> None:
+    report = validate_config(_config(tmp_path))
+    assert not _of(report, PG_DUMP_PATH)
+
+
+def test_pg_dump_path_existing_and_executable_is_ok(tmp_path: Path) -> None:
+    pg_dump = tmp_path / "pg_dump"
+    pg_dump.write_text("#!/bin/sh\n", encoding="utf-8")
+    pg_dump.chmod(0o755)
+
+    def mutate(data: dict[str, Any]) -> None:
+        _postgresql_entry(data)
+        data["databases"][0]["pg_dump_path"] = str(pg_dump)
+
+    report = validate_config(_config(tmp_path, mutate=mutate))
+    assert _severities(report, PG_DUMP_PATH) == [Severity.OK]
+    assert "existe y es ejecutable" in _messages(report, PG_DUMP_PATH)
+
+
+def test_pg_dump_path_missing_warns(tmp_path: Path) -> None:
+    def mutate(data: dict[str, Any]) -> None:
+        _postgresql_entry(data)
+        data["databases"][0]["pg_dump_path"] = str(tmp_path / "pg_dump-inexistente")
+
+    report = validate_config(_config(tmp_path, mutate=mutate))
+    assert _severities(report, PG_DUMP_PATH) == [Severity.WARNING]
+    assert report.is_valid()
+
+
+def test_pg_dump_path_directory_is_error(tmp_path: Path) -> None:
+    def mutate(data: dict[str, Any]) -> None:
+        _postgresql_entry(data)
+        data["databases"][0]["pg_dump_path"] = str(tmp_path)
+
+    report = validate_config(_config(tmp_path, mutate=mutate))
+    assert _severities(report, PG_DUMP_PATH) == [Severity.ERROR]
+
+
+@sin_permisos_posix
+def test_pg_dump_path_not_executable_warns(tmp_path: Path) -> None:
+    pg_dump = tmp_path / "pg_dump"
+    pg_dump.write_text("binario", encoding="utf-8")
+    pg_dump.chmod(0o644)
+
+    def mutate(data: dict[str, Any]) -> None:
+        _postgresql_entry(data)
+        data["databases"][0]["pg_dump_path"] = str(pg_dump)
+
+    report = validate_config(_config(tmp_path, mutate=mutate))
+    assert _severities(report, PG_DUMP_PATH) == [Severity.WARNING]
+    assert "no es ejecutable" in _messages(report, PG_DUMP_PATH)
+
+
+def test_windows_flavor_pg_dump_path_is_omitted_on_posix_host(tmp_path: Path) -> None:
+    def mutate(data: dict[str, Any]) -> None:
+        _postgresql_entry(data)
+        data["databases"][0]["pg_dump_path"] = "C:\\PostgreSQL\\18\\bin\\pg_dump.exe"
+
+    report = validate_config(_config(tmp_path, mutate=mutate), host_is_windows=False)
+    assert _severities(report, PG_DUMP_PATH) == [Severity.INFO]
+    assert "verificación omitida" in _messages(report, PG_DUMP_PATH)
 
 
 # --- coherencia y advisorias ---

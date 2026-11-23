@@ -2,6 +2,7 @@
   "databases": [
     {
       "name": "erp_principal",
+      "type": "firebird",
       "connection": "localhost/3050:/var/lib/firebird/data/erp.fdb",
       "user": "SYSDBA",
       "charset": "ISO8859_1"

@@ -5,7 +5,33 @@ Todos los cambios relevantes de ODIN se documentan en este archivo.
 El formato se basa en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/)
 y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
-## Unreleased
+## 1.1.0 - 2026-11-22
+
+Segunda release menor: soporte **PostgreSQL 18.0+** como segundo motor de
+respaldo junto a Firebird, con el contrato de configuración de dos motores
+(`type` explícito y obligatorio por base) y el pipeline existente (compresión
+7z, transferencia SFTP, correo y retención local) sin cambios de
+comportamiento.
+
+### Añadido
+
+- **F9. Soporte PostgreSQL 18+ (`pg_dump`)**: segundo motor de respaldo con
+  dump lógico por base (`pg_dump --format=custom`, artefacto `.dump` →
+  `.dump.7z`) y contraseña vía `PGPASSWORD` en el entorno del subproceso
+  (nunca en la línea de comandos ni en los logs). Contrato de configuración de
+  dos motores: `databases[].type` explícito y obligatorio (`"firebird"` |
+  `"postgresql"`), campos por motor (`host`, `port`, `dbname`,
+  `pg_dump_path`, `pg_dump_timeout_sec` y `local.pg_dump_timeout_sec`) y
+  checks condicionales en `odin validate` (que sigue siendo estático y sin
+  red). Paquete `odin/engines/` (protocolo `Engine`, engines Firebird y
+  PostgreSQL) con `BackupExecutor` genérico y dispatch por `type`; finder
+  `pg_dump` con las rutas típicas de la serie 18 (majors ≥ 18, gana el mayor)
+  y auto-detección por `PATH`. Retención de artefactos `.fbk|.dump` (`.7z`),
+  CLI con descripción y helps de dos motores, y job de integración
+  `postgresql` en la CI contra `postgres:18` real. La restauración (`.dump`)
+  queda documentada como operación manual en
+  [`docs/postgresql.md`](docs/postgresql.md). Firebird sin cambios de
+  comportamiento.
 
 ### Corregido
 
@@ -31,21 +57,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ### Documentación
 
-- Nueva [`docs/postgresql.md`](docs/postgresql.md): **especificación y plan de
-  implementación del soporte PostgreSQL 18+** (segundo motor con `pg_dump`,
-  formato custom `.dump`, contrato de configuración con `type` explícito y
-  obligatorio, seam `odin/engines/`, finder `pg_dump`, tests y CI), aprobados
-  en el mapa wayfinder `soporte-postgresql`. La implementación es posterior al
-  documento: hasta que aterrice, los campos PostgreSQL documentados no son
-  aceptados por el parser (nota de alcance en
-  [`docs/configuration.md`](docs/configuration.md) y el README).
+- Nueva [`docs/postgresql.md`](docs/postgresql.md): **especificación, plan y
+  notas de restauración del soporte PostgreSQL 18+** (segundo motor con
+  `pg_dump`, formato custom `.dump`, contrato de configuración con `type`
+  explícito y obligatorio, seam `odin/engines/`, finder `pg_dump`, tests y
+  CI), aprobados en el mapa wayfinder `soporte-postgresql` e implementados en
+  esta release.
 - Nueva referencia [`docs/configuration.md`](docs/configuration.md): todos los
-  campos del JSON (tipo, obligatoriedad, default, rangos, reglas cruzadas,
-  ejemplos y límites conocidos de la 1.0.0), enlazada desde el README,
+  campos del JSON de los dos motores (tipo, obligatoriedad, default, rangos,
+  reglas cruzadas, ejemplos y límites conocidos), enlazada desde el README,
   `examples/README.md` y la guía de seguridad. En el resumen se corrigieron
   `local.log_level` (sin `CRITICAL`), la semántica de `sftp_retries`, los
   defaults de SMTP y el alcance real de los campos SFTP locales y de
   `sftp_operation_timeout_sec`.
+- README, referencia de configuración, ejemplos y `CHANGELOG` actualizados al
+  contrato de dos motores vigente: se retiró el estado «planificado» de
+  PostgreSQL (descripción, requisitos, resumen de campos, flujo de `odin
+  run`, retención y troubleshooting) y `examples/config.{linux,windows}.json`
+  suman la entrada PostgreSQL.
 - Nota de despliegue para Windows (README, troubleshooting y compatibilidad):
   instalar Python 3.14 **final** y no dejar que uv descargue la alpha
   `3.14.0a6` de su registro gestionado, previa a PEP 758 y con ABI incompatible

@@ -2,12 +2,24 @@
   "databases": [
     {
       "name": "nombre_clave_sistema",
+      "type": "firebird",
       "connection": "localhost/3050:C:\\Datos\\ERP\\erp.fdb",
       "user": "SYSDBA",
       "password": "***",
       "role": null,
       "charset": "ISO8859_1",
       "gbak_path": null
+    },
+    {
+      "name": "ventas_pg",
+      "type": "postgresql",
+      "host": "db.example.com",
+      "port": 5432,
+      "dbname": "ventas",
+      "user": "odin_backup",
+      "password": "***",
+      "pg_dump_path": null,
+      "pg_dump_timeout_sec": null
     }
   ],
   "compression": {
@@ -46,14 +58,16 @@
   },
   "local": {
     "work_dir": "D:\\Backups\\odin",
-    "retention_days": 7
+    "retention_days": 7,
+    "gbak_timeout_sec": 7200,
+    "pg_dump_timeout_sec": 7200
   },
   "scheduler": {
     "enabled": true,
     "timezone": "America/Argentina/Buenos_Aires",
     "jobs": [
       {
-        "databases": ["nombre_clave_sistema"],
+        "databases": ["nombre_clave_sistema", "ventas_pg"],
         "schedule": "0 2 * * *",
         "on_misfire": "run_once",
         "skip_if_running": true

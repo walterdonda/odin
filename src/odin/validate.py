@@ -41,7 +41,7 @@ from enum import Enum
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from odin.config import AuthMethod, Config, ConfigError, HostKeyPolicy
+from odin.config import AuthMethod, Config, ConfigError, DbEngine, HostKeyPolicy
 from odin.paths import is_windows_flavor
 from odin.scheduler import cron_trigger, next_fire_times
 
@@ -425,8 +425,13 @@ def _check_private_keys(report: ValidationReport, config: Config, host_is_window
 
 
 def _check_gbak_paths(report: ValidationReport, config: Config, host_is_windows: bool) -> None:
-    """Verifica el ``gbak_path`` explícito de cada base (``null`` = auto-detección)."""
+    """Verifica el ``gbak_path`` explícito de cada base Firebird (``null`` = auto-detección).
+
+    Solo aplica a las entradas con ``type: firebird``.
+    """
     for index, database in enumerate(config.databases):
+        if database.type is not DbEngine.FIREBIRD:
+            continue
         field_path = f"{_ROOT}.databases[{index}].gbak_path"
         if database.gbak_path is None:
             report.add(
@@ -473,6 +478,64 @@ def _check_gbak_paths(report: ValidationReport, config: Config, host_is_windows:
                 field_path,
                 f"existe y es ejecutable ({path})",
                 check="gbak_path_executable",
+            )
+
+
+def _check_pg_dump_paths(report: ValidationReport, config: Config, host_is_windows: bool) -> None:
+    """Verifica el ``pg_dump_path`` explícito de cada base PostgreSQL (``null`` = auto-detección).
+
+    Espejo de ``_check_gbak_paths``; solo aplica a las entradas con
+    ``type: postgresql``.
+    """
+    for index, database in enumerate(config.databases):
+        if database.type is not DbEngine.POSTGRESQL:
+            continue
+        field_path = f"{_ROOT}.databases[{index}].pg_dump_path"
+        if database.pg_dump_path is None:
+            report.add(
+                Severity.INFO,
+                field_path,
+                "es null; se auto-detectará según SO y versión de PostgreSQL (Etapa 2)",
+                check="pg_dump_autodetect",
+            )
+            continue
+        path = Path(database.pg_dump_path)
+        if _flavor_mismatch(path, host_is_windows):
+            _omitted(
+                report,
+                field_path,
+                path,
+                host_is_windows=host_is_windows,
+                check="pg_dump_path_exists",
+            )
+            continue
+        if path.is_dir():
+            report.add(
+                Severity.ERROR,
+                field_path,
+                f"es un directorio; se esperaba el ejecutable pg_dump ({path})",
+                check="pg_dump_path_exists",
+            )
+        elif not path.exists():
+            report.add(
+                Severity.WARNING,
+                field_path,
+                f"no existe; el respaldo de esta base fallará ({path})",
+                check="pg_dump_path_exists",
+            )
+        elif not os.access(path, os.X_OK):
+            report.add(
+                Severity.WARNING,
+                field_path,
+                f"existe pero no es ejecutable por el usuario actual ({path})",
+                check="pg_dump_path_executable",
+            )
+        else:
+            report.add(
+                Severity.OK,
+                field_path,
+                f"existe y es ejecutable ({path})",
+                check="pg_dump_path_executable",
             )
 
 
@@ -708,6 +771,7 @@ def validate_config(config: Config, *, host_is_windows: bool | None = None) -> V
     _check_log_dir(report, config, host)
     _check_disk_space(report, config, host)
     _check_gbak_paths(report, config, host)
+    _check_pg_dump_paths(report, config, host)
     _check_private_keys(report, config, host)
     _check_servers(report, config)
     _check_notification(report, config)

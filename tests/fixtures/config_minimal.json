@@ -2,6 +2,7 @@
   "databases": [
     {
       "name": "bd_minima",
+      "type": "firebird",
       "connection": "localhost/3050:/var/lib/firebird/data/min.fdb",
       "user": "SYSDBA",
       "password": "masterkey"

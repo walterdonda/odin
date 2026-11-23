@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from odin.backup import BackupExecutor
-from odin.config import DatabaseConfig
+from odin.config import DatabaseConfig, DbEngine
 from tests.firebird_container import (
     DOCKER,
     FirebirdContainer,
@@ -58,6 +58,7 @@ def test_backup_flow_against_firebird(tmp_path: Path) -> None:
         backup_file = tmp_path / DATABASE_NAME.replace(".fdb", ".fbk")
         database = DatabaseConfig(
             name="odin_integration",
+            type=DbEngine.FIREBIRD,
             connection=container.database_spec(),
             user="sysdba",
             password=PASSWORD,

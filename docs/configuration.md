@@ -3,27 +3,20 @@
 Esta guía documenta **todos los campos** del JSON de configuración de ODIN:
 tipo, obligatoriedad, valor por defecto, rangos, semántica y reglas de
 validación. El contrato se implementa en `src/odin/config.py`; el
-comportamiento de consumo corresponde a la versión **1.0.0**.
+comportamiento de consumo corresponde a la versión **1.1.0**.
 
 - Guía rápida y operación: [`README.md`](../README.md#configuración).
 - Ejemplos listos para copiar: [`examples/`](../examples/).
 - Permisos, claves SSH y host keys: [`docs/security.md`](security.md).
 - Resolución de `gbak` por versión: [`docs/firebird.md`](firebird.md).
-- Especificación y plan del soporte PostgreSQL: [`docs/postgresql.md`](postgresql.md).
+- Especificación y notas de restauración del soporte PostgreSQL: [`docs/postgresql.md`](postgresql.md).
 - Scheduler y servicio residente: [`docs/service.md`](service.md).
 
 > **Nota de alcance:** esta referencia describe lo que el código hace hoy,
-> incluidas las limitaciones conocidas de la versión 1.0.0. Los campos
+> incluidas las limitaciones conocidas de la versión actual. Los campos
 > marcados como *aceptado sin efecto* se validan al cargar, pero todavía no
 > influyen en la ejecución; el detalle está en
 > [§11](#11-notas-de-implementación-y-límites-conocidos).
-
-> **Soporte PostgreSQL (especificación aprobada, implementación pendiente):**
-> los campos `type`, `host`, `port`, `dbname`, `pg_dump_path` y
-> `pg_dump_timeout_sec` descritos en esta guía corresponden a la especificación
-> aprobada en [`docs/postgresql.md`](postgresql.md) (mapa wayfinder
-> `soporte-postgresql`) y **entran en vigor con su implementación**: el parser
-> de la 1.0.0 todavía los rechaza como campos desconocidos.
 
 ---
 
@@ -290,7 +283,7 @@ error.
 | `host_key_policy` | `string` | No | `"strict"` | `strict`, `known_hosts`, `accept-new` o `insecure`; ver más abajo. |
 | `sftp_retries` | `integer` | No | `3` | Entero `>= 0`, pero el ejecutor exige **al menos `1`**. Es la cantidad de **intentos totales** por conexión y subida, no reintentos adicionales. |
 | `sftp_connect_timeout_sec` | `integer` | No | `30` | Entero `>= 1`. Timeout de la conexión SSH. |
-| `sftp_operation_timeout_sec` | `integer` | No | `60` | Entero `>= 1`. **Aceptado sin efecto en 1.0.0**: no se aplica a las operaciones SFTP. |
+| `sftp_operation_timeout_sec` | `integer` | No | `60` | Entero `>= 1`. **Aceptado sin efecto**: no se aplica a las operaciones SFTP. |
 | `sftp_retry_backoff_base` | `number` | No | `2.0` | Número `>= 0`. Base del backoff exponencial entre intentos. |
 | `sftp_retry_max_delay_sec` | `number` | No | `30.0` | Número `>= 0`. Tope del backoff, en segundos. |
 
@@ -346,8 +339,9 @@ están en [`docs/security.md`](security.md#4-políticas-de-host-key).
   `min(sftp_retry_backoff_base * 2^intento, sftp_retry_max_delay_sec)`.
   `0` en la base desactiva la espera.
 - `sftp_connect_timeout_sec` se pasa al `connect` de Paramiko.
-  `sftp_operation_timeout_sec` se acepta y valida, pero la 1.0.0 todavía no lo
-  aplica; ver [§11](#11-notas-de-implementación-y-límites-conocidos).
+  `sftp_operation_timeout_sec` se acepta y valida, pero la versión actual
+  todavía no lo aplica; ver
+  [§11](#11-notas-de-implementación-y-límites-conocidos).
 - Un `sftp_retries: 0` pasa el parser pero hace fallar todas las operaciones
   en el ejecutor. Usá `>= 1`.
 
@@ -400,8 +394,8 @@ están en [`docs/security.md`](security.md#4-políticas-de-host-key).
 | `port` | `integer` | Sí | — | Entero entre `1` y `65535`. |
 | `starttls` | `boolean` | No | `true` | Negocia STARTTLS antes de autenticar. `false` permite modo plano (relays locales) o SSL implícito junto con `ssl: true`. |
 | `ssl` | `boolean` | No | `false` | SSL implícito (típicamente puerto `465`). Es mutuamente excluyente con `starttls: true`. |
-| `username` | `string` | Sí (1.0.0) | — | No vacío. Usuario de autenticación SMTP. |
-| `password` | `string` | Sí (1.0.0) | — | No vacío. Contraseña de autenticación SMTP; se enmascara. |
+| `username` | `string` | Sí | — | No vacío. Usuario de autenticación SMTP. |
+| `password` | `string` | Sí | — | No vacío. Contraseña de autenticación SMTP; se enmascara. |
 
 ### 6.2 Transporte
 
@@ -419,9 +413,9 @@ están en [`docs/security.md`](security.md#4-políticas-de-host-key).
   aborta el respaldo: deja el informe como no enviado y degrada el exit code
   cuando corresponde.
 - El cuerpo es texto plano; no se adjuntan los respaldos.
-- `username` no vacío dispara `AUTH` con `password`. En la 1.0.0 el parser
-  exige ambos campos no vacíos; el modelo y el notificador admiten `""` para
-  relays sin autenticación, pero esa configuración todavía no es aceptada.
+- `username` no vacío dispara `AUTH` con `password`. El parser exige ambos
+  campos no vacíos; el modelo y el notificador admiten `""` para relays sin
+  autenticación, pero esa configuración todavía no es aceptada.
   Ver [§11](#11-notas-de-implementación-y-límites-conocidos).
 - El timeout de red del envío SMTP es fijo (30 s) y no se configura en el
   JSON.
@@ -454,9 +448,9 @@ están en [`docs/security.md`](security.md#4-políticas-de-host-key).
 | `log_dir` | `string \| null` | No | `null` | Directorio del `odin.log`. Si es `null` o se omite, se usa `<work_dir>/logs`. |
 | `min_free_mb` | `integer` | No | `1024` | Entero `>= 0`. Espacio libre mínimo que **comprueba `odin validate`**; no bloquea `odin run`. |
 | `gbak_timeout_sec` | `integer` | No | `7200` | Entero `> 0`. Timeout por defecto de cada respaldo Firebird cuando la base no define `gbak_timeout_sec`. |
-| `pg_dump_timeout_sec` | `integer` | No | `7200` | Entero `> 0`. Timeout por defecto de cada respaldo PostgreSQL cuando la base no define `pg_dump_timeout_sec`. (Especificación aprobada; ver nota de alcance.) |
-| `sftp_retries` | `integer` | No | `3` | Entero `>= 0`. **Aceptado sin efecto en 1.0.0**: cada servidor usa su propio `sftp_retries`. |
-| `sftp_connect_timeout_sec` | `integer` | No | `30` | Entero `> 0`. **Aceptado sin efecto en 1.0.0**: cada servidor usa su propio `sftp_connect_timeout_sec`. |
+| `pg_dump_timeout_sec` | `integer` | No | `7200` | Entero `> 0`. Timeout por defecto de cada respaldo PostgreSQL cuando la base no define `pg_dump_timeout_sec`. |
+| `sftp_retries` | `integer` | No | `3` | Entero `>= 0`. **Aceptado sin efecto**: cada servidor usa su propio `sftp_retries`. |
+| `sftp_connect_timeout_sec` | `integer` | No | `30` | Entero `> 0`. **Aceptado sin efecto**: cada servidor usa su propio `sftp_connect_timeout_sec`. |
 
 ### 7.1 Directorios
 
@@ -495,11 +489,11 @@ el tamaño de tus bases y la frecuencia de respaldo.
 
 - `local.gbak_timeout_sec` actúa como default; `databases[].gbak_timeout_sec`
   tiene precedencia cuando no es `null`. Ídem `local.pg_dump_timeout_sec` /
-  `databases[].pg_dump_timeout_sec` para PostgreSQL (especificación aprobada;
-  ver nota de alcance).
+  `databases[].pg_dump_timeout_sec` para PostgreSQL.
 - `local.sftp_retries` y `local.sftp_connect_timeout_sec` se aceptan y se
-  parsean, pero la 1.0.0 **no los propaga** a los servidores. Configurá los
-  valores en cada `servers[]`; sus defaults son `3` y `30` respectivamente.
+  parsean, pero la versión actual **no los propaga** a los servidores.
+  Configurá los valores en cada `servers[]`; sus defaults son `3` y `30`
+  respectivamente.
 
 ```json
 {
@@ -586,8 +580,7 @@ Además de los tipos y rangos de cada tabla, al cargar se verifican:
 3. **Coherencia de autenticación**:
    - `method: password` exige `password` y prohíbe `private_key`/`passphrase`;
    - `method: key` exige `private_key` y prohíbe `password`.
-4. **Coherencia por motor** (espejo del patrón de `auth`; especificación
-   aprobada, ver nota de alcance):
+4. **Coherencia por motor** (espejo del patrón de `auth`):
    - un campo de un motor presente en una entrada del otro →
      `solo aplica cuando type es '<motor>'`;
    - `connection` ausente con `type: "firebird"`; `host` o `dbname` ausentes
@@ -623,7 +616,7 @@ lectura. Al final configura el logging, que puede crear `local.log_dir` y
 | `local.log_dir` | Existencia/creabilidad; si es `null`, informa el derivado `<work_dir>/logs`. |
 | `local.min_free_mb` | Espacio libre en el ancestro existente más cercano a `work_dir`. |
 | `databases[].gbak_path` | Existencia, que no sea un directorio y permisos de ejecución (solo si es explícito). |
-| `databases[].pg_dump_path` | Ídem para PostgreSQL (solo si es explícito); `null` se informa como auto-detección. (Especificación aprobada; ver nota de alcance.) |
+| `databases[].pg_dump_path` | Ídem para PostgreSQL (solo si es explícito); `null` se informa como auto-detección. |
 | `servers[].auth.private_key` | Existencia, legibilidad y permisos recomendados (solo con `method: key`). |
 | `host_key_policy: insecure` | Advertencia de MITM. |
 | SMTP sin cifrar | Advertencia si `starttls: false` y `ssl: false`. |
@@ -650,11 +643,11 @@ Los exit codes completos están en el
 
 ## 11. Notas de implementación y límites conocidos
 
-Estas son las diferencias entre el contrato ideal y lo que la versión 1.0.0
+Estas son las diferencias entre el contrato ideal y lo que la versión actual
 aplica realmente. Se documentan para que la configuración no prometa efectos
 que hoy no existen.
 
-| Campo o situación | Estado en 1.0.0 | Detalle |
+| Campo o situación | Estado actual | Detalle |
 |---|---|---|
 | `databases[].charset` | Aceptado, no usado | Se conserva en el modelo; `gbak` no tiene switch de charset y no se pasa. |
 | `local.sftp_retries` | Aceptado, no usado | Cada `servers[]` usa su propio `sftp_retries` (default `3`). |
@@ -665,7 +658,6 @@ que hoy no existen.
 | `local.log_level: "CRITICAL"` | No soportado | El enum solo acepta `DEBUG`, `INFO`, `WARNING` y `ERROR`. |
 | `local.min_free_mb` | Solo `odin validate` | No bloquea ni condiciona `odin run`; es una advertencia temprana. |
 | `databases[].name` | Sin validación de caracteres | Se usa como prefijo del nombre de archivo. Evitá separadores de ruta y caracteres inválidos del sistema de archivos. |
-| `databases[].type` y campos PostgreSQL | Especificación aprobada, no implementada | `type`, `host`, `port`, `dbname`, `pg_dump_path`, `pg_dump_timeout_sec` y `local.pg_dump_timeout_sec` se documentan en esta guía según [`docs/postgresql.md`](postgresql.md), pero el parser de la 1.0.0 todavía los rechaza; entran en vigor con esa implementación. |
 | `servers[].remote_path` relativo | Aceptado, no recomendado | La creación de directorios lo interpreta desde `/`; usá una ruta absoluta para evitar discrepancias. |
 
 Si necesitás uno de estos comportamientos en producción, verificalo contra la

@@ -39,6 +39,7 @@ __all__ = [
     "ConfigError",
     "ConfigProblem",
     "DatabaseConfig",
+    "DbEngine",
     "HostKeyPolicy",
     "LocalConfig",
     "LogLevel",
@@ -71,6 +72,17 @@ class AuthMethod(Enum):
 
     PASSWORD = "password"
     KEY = "key"
+
+
+class DbEngine(Enum):
+    """Motor de la base de datos (``databases[].type``).
+
+    Obligatorio y explícito en cada entrada, sin default: define qué campos
+    aplican (Firebird vs. PostgreSQL) y qué motor ejecuta el respaldo.
+    """
+
+    FIREBIRD = "firebird"
+    POSTGRESQL = "postgresql"
 
 
 class HostKeyPolicy(Enum):
@@ -112,16 +124,31 @@ class ConfigError(Exception):
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class DatabaseConfig:
-    """Base de datos Firebird a respaldar."""
+    """Base de datos a respaldar, Firebird o PostgreSQL según ``type``.
+
+    ``type`` es obligatorio y sin default. Los campos con nombre de motor solo
+    aplican a su motor (la exigencia/el rechazo por motor es semántico, en
+    ``Config.validate_semantics``): ``connection``/``role``/``charset``/
+    ``gbak_path``/``gbak_timeout_sec`` para Firebird; ``host``/``port``/
+    ``dbname``/``pg_dump_path``/``pg_dump_timeout_sec`` para PostgreSQL.
+    ``port`` es ``None`` cuando está ausente (presencia explícita detectable);
+    el default efectivo 5432 lo aplica el engine al construir el comando.
+    """
 
     name: str
-    connection: str
+    type: DbEngine
     user: str
     password: str
+    connection: str | None = None
     role: str | None = None
     charset: str | None = None
     gbak_path: str | None = None
     gbak_timeout_sec: int | None = None
+    host: str | None = None
+    port: int | None = None
+    dbname: str | None = None
+    pg_dump_path: str | None = None
+    pg_dump_timeout_sec: int | None = None
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -196,6 +223,7 @@ class LocalConfig:
     log_dir: Path | None = None
     min_free_mb: int = 1024
     gbak_timeout_sec: int = 7200
+    pg_dump_timeout_sec: int = 7200
     sftp_retries: int = 3
     sftp_connect_timeout_sec: int = 30
 
@@ -239,8 +267,9 @@ class Config:
     def validate_semantics(self) -> list[ConfigProblem]:
         """Validaciones cruzadas sobre el modelo ya construido.
 
-        Cubre unicidad de nombres, referencias de los jobs del scheduler y
-        coherencia entre ``auth.method`` y los campos de credenciales.
+        Cubre unicidad de nombres, referencias de los jobs del scheduler,
+        coherencia entre ``auth.method`` y los campos de credenciales, y las
+        reglas por motor de ``databases[].type`` (``_db_problems``).
         """
         problems: list[ConfigProblem] = []
         problems.extend(
@@ -259,6 +288,8 @@ class Config:
                             message=f"referencia una base de datos inexistente: '{name}'",
                         )
                     )
+        for index, database in enumerate(self.databases):
+            problems.extend(_db_problems(database, f"{_ROOT}.databases[{index}]"))
         for index, server in enumerate(self.servers):
             problems.extend(_auth_problems(server.auth, f"{_ROOT}.servers[{index}].auth"))
         return problems
@@ -342,6 +373,51 @@ def _auth_problems(auth: ServerAuth, path: str) -> list[ConfigProblem]:
                     message="solo aplica cuando auth.method es 'password'",
                 )
             )
+    return problems
+
+
+_FIREBIRD_ONLY_FIELDS = ("connection", "role", "charset", "gbak_path", "gbak_timeout_sec")
+_POSTGRESQL_ONLY_FIELDS = ("host", "port", "dbname", "pg_dump_path", "pg_dump_timeout_sec")
+
+# Reglas por motor: (motor, campos_requeridos, campos_ajenos, otro_motor).
+# ``campos_requeridos`` son los de conexión exigidos por el motor; los
+# ``campos_ajenos`` (del otro motor) presentes disparan "solo aplica…".
+_DB_ENGINE_RULES: tuple[tuple[DbEngine, tuple[str, ...], tuple[str, ...], DbEngine], ...] = (
+    (DbEngine.FIREBIRD, ("connection",), _POSTGRESQL_ONLY_FIELDS, DbEngine.POSTGRESQL),
+    (DbEngine.POSTGRESQL, ("host", "dbname"), _FIREBIRD_ONLY_FIELDS, DbEngine.FIREBIRD),
+)
+
+
+def _db_problems(database: DatabaseConfig, path: str) -> list[ConfigProblem]:
+    """Reglas por motor de ``databases[]`` (espejo del patrón ``_auth_problems``).
+
+    El parse estructural valida solo tipos de dato; la exigencia y el rechazo
+    de campos según ``type`` es semántico: un campo de un motor presente en una
+    entrada del otro es problema ("solo aplica cuando type es '<motor>'"), y
+    el campo de conexión requerido por el motor ausente también ("es requerido
+    cuando type es '<motor>'"). ``null`` cuenta como ausente.
+    """
+    problems: list[ConfigProblem] = []
+    for motor, required_fields, foreign_fields, other_motor in _DB_ENGINE_RULES:
+        if database.type is not motor:
+            continue
+        for field_name in required_fields:
+            if not getattr(database, field_name):
+                problems.append(
+                    ConfigProblem(
+                        field_path=f"{path}.{field_name}",
+                        message=f"es requerido cuando type es '{motor.value}'",
+                    )
+                )
+        for field_name in foreign_fields:
+            if getattr(database, field_name) is not None:
+                problems.append(
+                    ConfigProblem(
+                        field_path=f"{path}.{field_name}",
+                        message=f"solo aplica cuando type es '{other_motor.value}'",
+                    )
+                )
+        break
     return problems
 
 
@@ -536,6 +612,7 @@ def _email_field(v: _Validator, raw: dict[str, Any], key: str, path: str) -> str
 _DB_FIELDS = frozenset(
     {
         "name",
+        "type",
         "connection",
         "user",
         "password",
@@ -543,6 +620,11 @@ _DB_FIELDS = frozenset(
         "charset",
         "gbak_path",
         "gbak_timeout_sec",
+        "host",
+        "port",
+        "dbname",
+        "pg_dump_path",
+        "pg_dump_timeout_sec",
     }
 )
 
@@ -552,9 +634,10 @@ def _parse_database(
 ) -> DatabaseConfig:
     v.unknown_fields(raw, _DB_FIELDS, path)
     name = v.str_field(raw, "name", path) or ""
-    connection = v.str_field(raw, "connection", path) or ""
+    type_ = v.enum_field(raw, "type", path, DbEngine, default=DbEngine.FIREBIRD, required=True)
     user = v.str_field(raw, "user", path) or ""
     password = v.str_field(raw, "password", path) or ""
+    connection = v.str_field(raw, "connection", path, required=False, nullable=True)
     role = v.str_field(raw, "role", path, required=False, nullable=True)
     charset = v.str_field(raw, "charset", path, required=False, nullable=True)
     gbak_path_raw = v.str_field(raw, "gbak_path", path, required=False, nullable=True)
@@ -564,15 +647,33 @@ def _parse_database(
     gbak_timeout_sec = v.int_field(
         raw, "gbak_timeout_sec", path, required=False, nullable=True, exclusive_minimum=0
     )
+    host = v.str_field(raw, "host", path, required=False, nullable=True)
+    port = v.int_field(raw, "port", path, required=False, nullable=True, minimum=1, maximum=65535)
+    dbname = v.str_field(raw, "dbname", path, required=False, nullable=True)
+    pg_dump_path_raw = v.str_field(raw, "pg_dump_path", path, required=False, nullable=True)
+    pg_dump_path = (
+        None
+        if pg_dump_path_raw is None
+        else str(normalize_path(pg_dump_path_raw, base_dir=base_dir))
+    )
+    pg_dump_timeout_sec = v.int_field(
+        raw, "pg_dump_timeout_sec", path, required=False, nullable=True, exclusive_minimum=0
+    )
     return DatabaseConfig(
         name=name,
-        connection=connection,
+        type=type_,
         user=user,
         password=password,
+        connection=connection,
         role=role,
         charset=charset,
         gbak_path=gbak_path,
         gbak_timeout_sec=gbak_timeout_sec,
+        host=host,
+        port=port,
+        dbname=dbname,
+        pg_dump_path=pg_dump_path,
+        pg_dump_timeout_sec=pg_dump_timeout_sec,
     )
 
 
@@ -736,6 +837,7 @@ _LOCAL_FIELDS = frozenset(
         "log_dir",
         "min_free_mb",
         "gbak_timeout_sec",
+        "pg_dump_timeout_sec",
         "sftp_retries",
         "sftp_connect_timeout_sec",
     }
@@ -762,6 +864,11 @@ def _parse_local(v: _Validator, raw: dict[str, Any], path: str, base_dir: Path) 
     )
     if gbak_timeout_sec is None:
         gbak_timeout_sec = 0
+    pg_dump_timeout_sec = v.int_field(
+        raw, "pg_dump_timeout_sec", path, required=False, default=7200, exclusive_minimum=0
+    )
+    if pg_dump_timeout_sec is None:
+        pg_dump_timeout_sec = 0
     sftp_retries = v.int_field(raw, "sftp_retries", path, required=False, default=3, minimum=0)
     if sftp_retries is None:
         sftp_retries = 0
@@ -777,6 +884,7 @@ def _parse_local(v: _Validator, raw: dict[str, Any], path: str, base_dir: Path) 
         log_dir=log_dir,
         min_free_mb=min_free_mb,
         gbak_timeout_sec=gbak_timeout_sec,
+        pg_dump_timeout_sec=pg_dump_timeout_sec,
         sftp_retries=sftp_retries,
         sftp_connect_timeout_sec=sftp_connect_timeout_sec,
     )
