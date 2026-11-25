@@ -410,10 +410,10 @@ def test_success_sends_report_once_with_rendered_content(tmp_path: Path) -> None
     assert len(notifier.calls) == 1
     report = notifier.calls[0]
     assert report.subject.startswith("[ODIN] ÉXITO — respaldo de ")
-    assert "erp_principal" in report.body
-    assert "Servidores destino:" in report.body
-    assert "sitio-alterno-1" in report.body
-    assert "Totales:" in report.body
+    assert "erp_principal" in report.body_text
+    assert "Servidores destino:" in report.body_text
+    assert "sitio-alterno-1" in report.body_text
+    assert "Totales:" in report.body_text
     assert result.notification is not None
     assert result.notification.success is True
     assert result.notification.recipient == "control@example.com"
@@ -434,7 +434,7 @@ def test_total_failure_still_sends_report(tmp_path: Path) -> None:
     assert len(notifier.calls) == 1
     report = notifier.calls[0]
     assert report.subject.startswith("[ODIN] FALLO — respaldo de ")
-    assert "database is in use" in report.body
+    assert "database is in use" in report.body_text
     assert result.notification is not None
     assert result.notification.success is True
 
@@ -463,7 +463,7 @@ def test_batch_not_executed_still_sends_report(tmp_path: Path) -> None:
     assert len(notifier.calls) == 1
     report = notifier.calls[0]
     assert report.subject.startswith("[ODIN] FALLO — respaldo de ")
-    assert "Respaldo no ejecutado: no se pudo preparar el directorio de trabajo" in report.body
+    assert "Respaldo no ejecutado: no se pudo preparar el directorio de trabajo" in report.body_text
     assert result.notification is not None
 
 
@@ -484,7 +484,7 @@ def test_empty_batch_still_sends_report(tmp_path: Path) -> None:
     )
 
     assert len(notifier.calls) == 1
-    assert "No hay bases configuradas: nada que respaldar." in notifier.calls[0].body
+    assert "No hay bases configuradas: nada que respaldar." in notifier.calls[0].body_text
     assert result.notification is not None
 
 
@@ -537,8 +537,8 @@ def test_log_tail_lines_reach_the_report(
     )
 
     report = notifier.calls[0]
-    assert "Últimas líneas del log" in report.body
-    assert "marca-de-cola-123456" in report.body
+    assert "Últimas líneas del log" in report.body_text
+    assert "marca-de-cola-123456" in report.body_text
 
 
 def test_log_tail_disabled_with_zero_lines(
@@ -558,7 +558,7 @@ def test_log_tail_disabled_with_zero_lines(
         notifier=notifier,
     )
 
-    assert "marca-de-cola-123456" not in notifier.calls[0].body
+    assert "marca-de-cola-123456" not in notifier.calls[0].body_text
 
 
 # --- Retención del pipeline (Item 046) ---
@@ -585,7 +585,7 @@ def test_retention_runs_after_email_and_stays_out_of_report(tmp_path: Path) -> N
 
     assert sent_emails_at_retention == [1]
     assert len(notifier.calls) == 1
-    assert "Retención local" not in notifier.calls[0].body
+    assert "Retención local" not in notifier.calls[0].body_text
     assert retention.calls == [(config.local.work_dir, config.local.retention_days)]
     assert result.retention == RetentionResult()
 

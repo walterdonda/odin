@@ -4,7 +4,7 @@
 
 **Leyenda:** 📋 Planificado · 🚧 En progreso · ✅ Completo · ⏸️ Diferido · ❌ Excluido
 
-**Última actualización:** 2026-09-16 (Etapa 3 ✅ y Etapa 8 ✅ — Lote E 077-078 ✅: release `1.0.0` con versión y lock, metadata Production/Stable, `CHANGELOG.md` y artefactos verificados con instalación aislada, más el cierre de la etapa con los criterios de éxito 1–8 de la visión verificados uno a uno y la consistencia documental revisada en `docs/release-1.0.md`; gates finales `scripts/verify.py` EXIT 0 (6/6) + **652 passed + 8 skipped in 79.53 s** + ruff + mypy Success 19 files; salvedades: tag `v1.0.0` pendiente tras el commit y evidencia real de Windows Server delegada a CI/runbook)
+**Última actualización:** 2026-11-25 (Item 079 ✅ — parametrización del correo de notificación: plantillas `subject`/`body_text`/`body_html`/`signature` con placeholders de whitelist, bloque `environment` cliente+entorno, horario cron legible en español, multipart UTF-8 con `Content-Language: es-419`, `to` multi-destinatario, default `log_tail_lines` 200 y contexto de job en el pipeline; gates: **794 passed + 7 skipped** + ruff + mypy Success 24 files)
 ---
 
 ## Resumen por Etapa
@@ -254,6 +254,26 @@ Estado: ✅
 - ❌ Plataformas fuera de Windows Server / Linux LTS
 
 ---
+
+## Item 079 — Parametrización del correo de notificación (post-release)
+
+Estado: ✅
+
+Implementación directa del diseño cerrado en sesión de grilling (sin cola: la
+`queue-008` quedó agotada en la release 1.0.0). Detalle, criterios y decisiones
+en `docs/aide/items/079-parametrizacion-correo-notificacion.md`.
+
+### Entregables
+- ✅ `src/odin/config.py`: bloque raíz opcional `environment: {client, name}`; `notification` ampliado con `contact`/`subject`/`body_text`/`body_html`/`signature`; `to` multi-destinatario normalizado (coma); `log_tail_lines` default 200; whitelist `TEMPLATE_KEYS` validada en semántica (placeholder desconocido o llave suelta → error, `{cliente}`/`{entorno}` exigen el bloque `environment`).
+- ✅ `src/odin/cron_phrase.py` (nuevo): `humanize_cron` — frases en español con timezone para patrones comunes y fallback al cron crudo + zona.
+- ✅ `src/odin/notify.py`: `ReportMessage(subject, body_text, body_html)`, `render_template` literal por whitelist, asunto/cuerpos/firma desde plantillas con defaults integrados, firma siempre aplicada en ambas partes, `EmailNotifier` multipart UTF-8 + `Content-Language: es-419` (asignada después de `set_content` por comportamiento de Python 3.14).
+- ✅ `src/odin/pipeline.py`/`src/odin/scheduler.py`: contexto de job (`SchedulerJob`) a través de `run_pipeline` → `render_report`; `odin run` sigue como corrida manual ("manual").
+- ✅ Tests: `tests/test_cron_phrase.py` (15), `test_notify.py` (multipart, plantillas, entorno, firma, horario, truncado `+N`), `test_config.py` (multi-`to`, plantillas, environment), `plain_body()` en `tests/smtp_catcher.py` + integraciones actualizadas al multipart, `test_scheduler_integration` verifica el horario legible del job en el correo.
+- ✅ Docs: `docs/configuration.md` (§2, §6 con 6.4/6.5, §12), README, `examples/config.*.json` (+`environment`/`contact`), `reference/GLOSSARY.md` (Instancia, Entidad cliente, Entorno, Plantilla de notificación, Corrida).
+
+### Evidencia
+- Gates: `uv run pytest -q` → **794 passed + 7 skipped** (skips: gbak/Firebird ausentes, demos gated, SCM de Windows); `uv run ruff check src/odin tests` → All checks passed; `uv run mypy src/odin` → Success (24 source files); `uv run odin validate --config examples/config.linux.json` → exit 0.
+- Integración real: el catcher SMTP in-process recibe el mensaje multipart/alternative con charset UTF-8, `Content-Language: es-419` y `Horario: todos los días a las 02:00 (America/Argentina/Buenos_Aires)` en el cuerpo del ciclo del scheduler.
 
 ## Próximo Paso
 

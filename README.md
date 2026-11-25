@@ -112,13 +112,18 @@ Bloques del JSON:
 - **`servers[]`** — destinos SFTP con reintentos, timeouts y política de host
   keys. `auth.method` es `password` o `key` (`private_key` **RSA** con
   `passphrase` opcional, `~` permitido).
-- **`notification`** — casilla destino/remitente y transporte SMTP
-  (`starttls` por defecto; `smtp.ssl` para SSL implícito).
+- **`notification`** — casilla destino (varios emails separados por coma) /
+  remitente, transporte SMTP (`starttls` por defecto; `smtp.ssl` para SSL
+  implícito) y plantillas opcionales del informe: `subject`, `body_text`,
+  `body_html`, `signature` con placeholders `{clave}` (`contact` alimenta
+  `{contacto}` y la firma). Sin plantillas, corre el contenido integrado.
 - **`local`** — directorios de trabajo y logs, nivel de logging, retención,
   umbral de espacio libre y timeouts por defecto (`gbak_timeout_sec` y
   `pg_dump_timeout_sec`).
 - **`scheduler`** — jobs cron por subconjunto de bases (semántica en
   [`docs/scheduler.md`](docs/scheduler.md)).
+- **`environment`** (opcional) — tupla `client` + `name` que identifica la
+  instalación en el asunto (`[cliente-entorno]`) y en la firma.
 
 La referencia completa —tipo, obligatoriedad, default, rangos, reglas cruzadas
 y límites de la versión— está en
@@ -199,8 +204,9 @@ secuencial y con aislamiento de fallos:
    (reintentos, timeouts, verificación de tamaño por servidor). Una base
    cuenta como exitosa solo si las tres fases culminan bien.
 6. **Envía el informe por correo** siempre —estado global, detalle por base y
-   por servidor, cola del log enmascarada—; un SMTP caído no rompe la corrida
-   (exit 1 si el resto fue exitoso).
+   por servidor, horario legible del job (o "manual"), cola del log
+   enmascarada—; un SMTP caído no rompe la corrida (exit 1 si el resto fue
+   exitoso).
 7. **Aplica la retención local**: elimina los artefactos gestionados
    (`.fbk`/`.dump` y `.7z`) de `work_dir` más antiguos que
    `local.retention_days`; es función secundaria (no altera el exit code).
@@ -218,8 +224,11 @@ Otros temas de operación:
   `<resolved_log_dir>/odin.log` (`local.log_dir` o `<work_dir>/logs`),
   rotación 5 MiB × 5, nivel `local.log_level`, secretos enmascarados con
   `***`.
-- **Informe por correo**: texto plano, nunca adjunta el backup; asunto y
-  cuerpo pasan por el enmascarador de secretos.
+- **Informe por correo**: multipart (`text/plain` + `text/html`, UTF-8,
+  `Content-Language: es-419`), nunca adjunta el backup; asunto, cuerpos y
+  firma parametrizables con placeholders (`notification.subject`/`body_text`/
+  `body_html`/`signature`), horario legible en español y todo pasa por el
+  enmascarador de secretos.
 
 ## Seguridad
 

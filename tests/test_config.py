@@ -151,7 +151,13 @@ def test_minimal_config_applies_defaults(tmp_path: Path) -> None:
     assert config.local.sftp_retries == 3
     assert config.local.sftp_connect_timeout_sec == 30
     assert config.servers[0].host_key_policy is HostKeyPolicy.STRICT
-    assert config.notification.log_tail_lines == 50
+    assert config.notification.log_tail_lines == 200
+    assert config.notification.contact is None
+    assert config.notification.subject is None
+    assert config.notification.body_text is None
+    assert config.notification.body_html is None
+    assert config.notification.signature is None
+    assert config.environment is None
     assert config.local.resolved_log_dir == config.local.work_dir / "logs"
 
 
@@ -363,6 +369,117 @@ def test_email_format(tmp_path: Path) -> None:
 
     problems = _problems(tmp_path, _mutate(bad))
     assert any(p.field_path == "config.notification.to" for p in problems)
+
+
+def test_multiple_recipients_normalized(tmp_path: Path) -> None:
+    def multiple(d: dict[str, Any]) -> None:
+        d["notification"]["to"] = "control@example.com, ops@example.com"
+
+    config = _load(tmp_path, _mutate(multiple))
+    assert config.notification.to == "control@example.com, ops@example.com"
+
+
+def test_multiple_recipients_with_spaces_normalized(tmp_path: Path) -> None:
+    def multiple(d: dict[str, Any]) -> None:
+        d["notification"]["to"] = "control@example.com , ops@example.com"
+
+    config = _load(tmp_path, _mutate(multiple))
+    assert config.notification.to == "control@example.com, ops@example.com"
+
+
+def test_multiple_recipients_invalid_member_rejected(tmp_path: Path) -> None:
+    def multiple(d: dict[str, Any]) -> None:
+        d["notification"]["to"] = "control@example.com, no-es-un-email"
+
+    problems = _problems(tmp_path, _mutate(multiple))
+    assert any(
+        p.field_path == "config.notification.to" and "no-es-un-email" in p.message
+        for p in problems
+    )
+
+
+def test_notification_templates_parsed(tmp_path: Path) -> None:
+    def templates(d: dict[str, Any]) -> None:
+        d["environment"] = {"client": "caktus", "name": "prod"}
+        d["notification"].update(
+            {
+                "contact": "ops@example.com",
+                "subject": "[ODIN {entorno}] {estado} — {instancia}",
+                "body_text": "{bases}\n{totales}",
+                "body_html": "<pre>{log}</pre>",
+                "signature": "ODIN · {cliente}",
+                "log_tail_lines": 0,
+            }
+        )
+
+    config = _load(tmp_path, _mutate(templates))
+    assert config.notification.contact == "ops@example.com"
+    assert config.notification.subject == "[ODIN {entorno}] {estado} — {instancia}"
+    assert config.notification.body_text == "{bases}\n{totales}"
+    assert config.notification.body_html == "<pre>{log}</pre>"
+    assert config.notification.signature == "ODIN · {cliente}"
+    assert config.notification.log_tail_lines == 0
+
+
+def test_unknown_template_placeholder_rejected(tmp_path: Path) -> None:
+    def bad(d: dict[str, Any]) -> None:
+        d["notification"]["subject"] = "asunto {inventado}"
+
+    problems = _problems(tmp_path, _mutate(bad))
+    assert any(
+        p.field_path == "config.notification.subject" and "inventado" in p.message
+        for p in problems
+    )
+
+
+def test_stray_braces_in_template_rejected(tmp_path: Path) -> None:
+    def bad(d: dict[str, Any]) -> None:
+        d["notification"]["signature"] = "ODIN {cliente"
+
+    problems = _problems(tmp_path, _mutate(bad))
+    assert any(
+        p.field_path == "config.notification.signature" and "llaves reservadas" in p.message
+        for p in problems
+    )
+
+
+def test_template_requiring_environment_without_block_rejected(tmp_path: Path) -> None:
+    def bad(d: dict[str, Any]) -> None:
+        d["notification"]["subject"] = "[ODIN {cliente}] {estado}"
+
+    problems = _problems(tmp_path, _mutate(bad))
+    assert any(
+        p.field_path == "config.notification.subject" and "environment" in p.message
+        for p in problems
+    )
+
+
+def test_template_requiring_environment_with_block_parses(tmp_path: Path) -> None:
+    def both(d: dict[str, Any]) -> None:
+        d["environment"] = {"client": "caktus", "name": "prod"}
+        d["notification"]["subject"] = "[ODIN {cliente}-{entorno}] {estado}"
+
+    config = _load(tmp_path, _mutate(both))
+    assert config.environment is not None
+    assert config.environment.client == "caktus"
+    assert config.environment.name == "prod"
+    assert config.notification.subject == "[ODIN {cliente}-{entorno}] {estado}"
+
+
+def test_environment_block_requires_client_and_name(tmp_path: Path) -> None:
+    def partial(d: dict[str, Any]) -> None:
+        d["environment"] = {"client": "caktus"}
+
+    problems = _problems(tmp_path, _mutate(partial))
+    assert any(p.field_path == "config.environment.name" for p in problems)
+
+
+def test_environment_unknown_field_rejected(tmp_path: Path) -> None:
+    def extra(d: dict[str, Any]) -> None:
+        d["environment"] = {"client": "caktus", "name": "prod", "zone": "sur"}
+
+    problems = _problems(tmp_path, _mutate(extra))
+    assert any(p.field_path == "config.environment.zone" for p in problems)
 
 
 def test_smtp_ssl_defaults_false(tmp_path: Path) -> None:

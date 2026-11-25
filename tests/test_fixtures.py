@@ -204,7 +204,7 @@ def test_minimal_fixture_applies_defaults() -> None:
     # servers
     assert config.servers[0].host_key_policy is HostKeyPolicy.STRICT
     # notification
-    assert config.notification.log_tail_lines == 50
+    assert config.notification.log_tail_lines == 200
     assert config.notification.smtp.starttls is True
     # local (campos opcionales omitidos)
     assert config.local.log_level is LogLevel.INFO

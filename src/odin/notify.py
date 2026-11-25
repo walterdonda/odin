@@ -1,4 +1,4 @@
-"""Notificación por correo del informe de ejecución (Items 039 y 040).
+"""Notificación por correo del informe de ejecución (Items 039, 040 y 079).
 
 Cliente SMTP sobre ``smtplib`` (solo stdlib) que envía el informe a
 ``notification.to`` desde ``notification.from_`` usando ``notification.smtp``:
@@ -8,30 +8,40 @@ STARTTLS y validado en ``config.py``). Los timeouts de conexión/operación son
 parametrizables con ``DEFAULT_SMTP_TIMEOUT_SEC`` (30 s); no se exponen en el
 JSON para no sumar superficie de configuración.
 
+El mensaje es **multipart** (Item 079): ``text/plain`` y ``text/html`` en
+UTF-8 explícito con cabecera ``Content-Language: es-419``. Asunto, cuerpos y
+firma se construyen desde las plantillas opcionales del JSON
+(``notification.subject``/``body_text``/``body_html``/``signature``) con
+placeholders ``{clave}`` de whitelist (``odin.config.TEMPLATE_KEYS``); si el
+campo falta se usa el contenido integrado.
+
 ``NotificationResult`` documenta el desenlace: los errores operativos
 esperados (``SMTPException``, ``OSError``, ``socket.timeout`` y sus
 subclases como ``ConnectionRefusedError``) **no** se propagan — se reportan en
 el resultado y se loguean sin exponer credenciales, de modo que un SMTP caído
 no tumba el pipeline (Item 043).
 
-``render_report`` construye el asunto y el cuerpo en texto plano desde el
-``PipelineResult`` + ``Config`` sin tocar la red. El texto pasa por
-``SecretMasker`` como segunda barrera de enmascarado: el correo nunca incluye
-credenciales ni adjunta el backup.
+``render_report`` construye el asunto y los cuerpos desde el
+``PipelineResult`` + ``Config`` (+ contexto del job del scheduler, opcional)
+sin tocar la red. El texto pasa por ``SecretMasker`` como segunda barrera de
+enmascarado: el correo nunca incluye credenciales ni adjunta el backup.
 """
 
 from __future__ import annotations
 
+import html
+import re
 import smtplib
 import socket
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from email.message import EmailMessage
 from typing import TYPE_CHECKING
 
-from odin.config import Config, SmtpConfig
+from odin.config import Config, SchedulerJob, SmtpConfig
+from odin.cron_phrase import humanize_cron
 from odin.log import SecretMasker, logger
 
 if TYPE_CHECKING:
@@ -44,6 +54,7 @@ __all__ = [
     "NotificationResult",
     "ReportMessage",
     "render_report",
+    "render_template",
 ]
 
 DEFAULT_SMTP_TIMEOUT_SEC = 30
@@ -53,6 +64,10 @@ STATUS_PARTIAL = "PARCIAL"
 STATUS_FAILURE = "FALLO"
 
 _TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+# Un placeholder que quedó sin reemplazar después del render (defensa: la
+# validación de configuración ya rechaza las claves desconocidas).
+_LEFTOVER_PLACEHOLDER_RE = re.compile(r"\{[^{}]*\}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,10 +88,15 @@ class NotificationResult:
 
 @dataclass(frozen=True, slots=True)
 class ReportMessage:
-    """Informe renderizado listo para enviar: asunto y cuerpo en texto plano."""
+    """Informe renderizado listo para enviar: asunto y cuerpos (texto + HTML).
+
+    ``body_html`` es opcional; cuando está presente el correo sale multipart
+    (``text/plain`` + ``text/html``), y ``None`` mantiene solo texto plano.
+    """
 
     subject: str
-    body: str
+    body_text: str
+    body_html: str | None = None
 
 
 class EmailNotifier:
@@ -107,9 +127,9 @@ class EmailNotifier:
     def send(self, report: ReportMessage) -> NotificationResult:
         """Envía ``report`` y devuelve el resultado; nunca propaga errores SMTP.
 
-        El cuerpo va como texto plano y no se adjunta el backup. El cierre de
-        la conexión es best-effort: un fallo al cerrar no convierte un envío
-        exitoso en fallo.
+        El cuerpo va como ``text/plain`` + ``text/html`` (multipart, UTF-8) y
+        no se adjunta el backup. El cierre de la conexión es best-effort: un
+        fallo al cerrar no convierte un envío exitoso en fallo.
         """
         start_time = time.perf_counter()
         try:
@@ -139,12 +159,21 @@ class EmailNotifier:
         )
 
     def _build_message(self, report: ReportMessage) -> EmailMessage:
-        """Construye el ``EmailMessage`` con el envelope de la configuración."""
+        """Construye el ``EmailMessage`` multipart con el envelope de la configuración.
+
+        Ambas partes van en UTF-8 explícito y el mensaje declara el idioma con
+        ``Content-Language: es-419`` (español latinoamericano, Item 079). La
+        cabecera se asigna **después** de ``set_content``/``add_alternative``:
+        en Python 3.14 esas llamadas limpian la cabecera si se fijó antes.
+        """
         message = EmailMessage()
         message["From"] = self.from_
         message["To"] = self.to
         message["Subject"] = report.subject
-        message.set_content(report.body)
+        message.set_content(report.body_text, subtype="plain", charset="utf-8")
+        if report.body_html is not None:
+            message.add_alternative(report.body_html, subtype="html", charset="utf-8")
+        message["Content-Language"] = "es-419"
         return message
 
     def _connect(self) -> smtplib.SMTP:
@@ -285,6 +314,56 @@ def _totals_line(pipeline: PipelineResult) -> str:
     )
 
 
+def render_template(template: str, values: Mapping[str, str]) -> str:
+    """Rellena los placeholders ``{clave}`` de ``template`` con ``values``.
+
+    Reemplazo literal por whitelist (nada de ``str.format``): los valores pueden
+    contener llaves sin riesgo de interpolación y las claves desconocidas no
+    pueden escapar a atributos. Un placeholder del ``template`` que no esté en
+    ``values`` lanza ``ValueError``: la validación de configuración
+    (``odin.config``) ya rechaza las claves desconocidas, así que acá es una
+    defensa de programación.
+    """
+    for match in _LEFTOVER_PLACEHOLDER_RE.finditer(template):
+        key = match.group(0)[1:-1]
+        if key not in values:
+            raise ValueError(f"placeholder sin valor: '{match.group(0)}'")
+    rendered = template
+    for key, value in values.items():
+        rendered = rendered.replace("{" + key + "}", value)
+    return rendered
+
+
+def _instances_phrase(names: Sequence[str]) -> str:
+    """Nombres de las instancias de la corrida, truncando a 3 con `` +N``."""
+    if not names:
+        return ""
+    if len(names) <= 3:
+        return ", ".join(names)
+    return ", ".join(names[:3]) + f" +{len(names) - 3}"
+
+
+def _default_signature(client: str, entorno: str, contact: str | None) -> str:
+    """Firma integrada: ``ODIN · {cliente}-{entorno}`` + línea de contacto."""
+    if client and entorno:
+        label = f"ODIN · {client}-{entorno}"
+    elif client:
+        label = f"ODIN · {client}"
+    else:
+        label = "ODIN"
+    lines = [label]
+    if contact:
+        lines.append(f"Contacto: {contact}")
+    return "\n".join(lines)
+
+
+def _log_section(log_tail: Sequence[str]) -> str:
+    """Sección de cola de log para las plantillas (vacía sin líneas)."""
+    if not log_tail:
+        return ""
+    return f"Últimas líneas del log ({len(log_tail)}):\n" + "\n".join(log_tail)
+
+
 def render_report(
     config: Config,
     pipeline: PipelineResult,
@@ -292,31 +371,137 @@ def render_report(
     log_tail: Sequence[str] = (),
     now: datetime | None = None,
     hostname: str | None = None,
+    job: SchedulerJob | None = None,
 ) -> ReportMessage:
-    """Construye el informe de ejecución sin tocar la red (Item 040).
+    """Construye el informe de ejecución sin tocar la red (Items 040 y 079).
 
     Deriva el estado global del ``BatchBackupResult`` final (ÉXITO/PARCIAL/
     FALLO), detalla cada base (respaldo, compresión y el error de la fase que
     falló), cada servidor destino y los totales. Si ``log_tail`` trae líneas
-    capturadas (Item 041), las agrega al final bajo "Últimas líneas del log".
-    ``now`` y ``hostname`` son inyectables para tests deterministas.
+    capturadas (Item 041), las agrega bajo "Últimas líneas del log".
+    ``now``, ``hostname`` y ``job`` son inyectables para tests deterministas:
+    ``job`` es el ``SchedulerJob`` del scheduler que disparó el ciclo (Item
+    079) —con él el ``{horario}`` sale legible y con su timezone—; en corridas
+    manuales (``None``) el horario es "manual".
 
-    El asunto y el cuerpo finales pasan por ``SecretMasker.from_config`` como
-    segunda barrera de enmascarado. El correo es solo texto: nunca adjunta el
-    backup ni incluye credenciales.
+    Asunto, cuerpos y firma salen de las plantillas opcionales del JSON
+    (``notification.subject``/``body_text``/``body_html``/``signature``) o del
+    contenido integrado; la firma se aplica siempre, en ambas partes. El
+    asunto y los cuerpos finales pasan por ``SecretMasker.from_config`` como
+    segunda barrera de enmascarado. El correo nunca adjunta el backup ni
+    incluye credenciales.
     """
     batch = pipeline.backup
     status = _global_status(batch)
     moment = now if now is not None else datetime.now()
     host = hostname if hostname is not None else socket.gethostname()
-    subject = f"[ODIN] {status} — respaldo de {host} ({moment.strftime(_TIMESTAMP_FORMAT)})"
+    environment = config.environment
+    client = environment.client if environment is not None else ""
+    entorno = environment.name if environment is not None else ""
 
-    lines = [
-        f"Estado global: {status}",
-        f"Host: {host}",
-        f"Fecha: {moment.strftime(_TIMESTAMP_FORMAT)}",
-        "",
+    instance_names = [result.database_name for result in batch.results]
+    if not instance_names:
+        instance_names = [database.name for database in config.databases]
+    instancia = _instances_phrase(instance_names)
+
+    engines = list(dict.fromkeys(database.type.value for database in config.databases))
+    motor = ", ".join(engines)
+
+    if job is not None:
+        horario = humanize_cron(job.schedule, config.scheduler.timezone)
+        zona_horaria = config.scheduler.timezone
+    else:
+        horario = "manual"
+        zona_horaria = ""
+
+    bases_text = "\n".join(_base_section(pipeline))
+    servers_text = "\n".join(_server_section(config, pipeline))
+    totals_text = _totals_line(pipeline)
+    log_text = _log_section(log_tail)
+    contact = config.notification.contact or ""
+
+    values = {
+        "cliente": client,
+        "entorno": entorno,
+        "instancia": instancia,
+        "motor": motor,
+        "estado": status,
+        "horario": horario,
+        "zona_horaria": zona_horaria,
+        "host": host,
+        "fecha": moment.strftime(_TIMESTAMP_FORMAT),
+        "contacto": contact,
+        "log": log_text,
+        "bases": bases_text,
+        "servidores": servers_text,
+        "totales": totals_text,
+    }
+
+    notification = config.notification
+    signature = (
+        render_template(notification.signature, values)
+        if notification.signature is not None
+        else _default_signature(client, entorno, contact)
+    )
+
+    if notification.subject is not None:
+        subject = render_template(notification.subject, values)
+    elif environment is not None:
+        subject = (
+            f"[ODIN] [{client}-{entorno}] {status} — respaldo de {instancia} "
+            f"({moment.strftime(_TIMESTAMP_FORMAT)})"
+        )
+    else:
+        subject = (
+            f"[ODIN] {status} — respaldo de {instancia} "
+            f"({moment.strftime(_TIMESTAMP_FORMAT)})"
+        )
+
+    if notification.body_text is None:
+        body_text = _default_body_text(values, signature, batch, pipeline, config, log_tail)
+    else:
+        body_text = render_template(notification.body_text, values) + _signature_block(signature)
+    if notification.body_html is None:
+        body_html = _default_body_html(values, signature, batch, pipeline, config, log_tail)
+    else:
+        escaped_values = {key: html.escape(value) for key, value in values.items()}
+        body_html = (
+            render_template(notification.body_html, escaped_values)
+            + f"<p>--</p><pre>{html.escape(signature)}</pre>"
+        )
+
+    masker = SecretMasker.from_config(config)
+    return ReportMessage(
+        subject=masker.mask(subject),
+        body_text=masker.mask(body_text),
+        body_html=masker.mask(body_html),
+    )
+
+
+def _signature_block(signature: str) -> str:
+    """Firma para texto plano: separador ``--`` + líneas de la firma."""
+    return f"\n\n--\n{signature}"
+
+
+def _default_body_text(
+    values: Mapping[str, str],
+    signature: str,
+    batch: BatchBackupResult,
+    pipeline: PipelineResult,
+    config: Config,
+    log_tail: Sequence[str],
+) -> str:
+    """Cuerpo texto integrado: cabecera, secciones y firma (Items 040 y 079)."""
+    header = [
+        f"Estado global: {values['estado']}",
+        f"Host: {values['host']}",
+        f"Fecha: {values['fecha']}",
     ]
+    if values["horario"] != "manual":
+        header.append(f"Horario: {values['horario']}")
+    if values["cliente"]:
+        header.append(f"Cliente: {values['cliente']} · Entorno: {values['entorno']}")
+    lines = [*header, ""]
     if batch.error_message is not None:
         lines.append(f"Respaldo no ejecutado: {batch.error_message}")
     elif not batch.results:
@@ -329,8 +514,50 @@ def render_report(
         lines.append(_totals_line(pipeline))
     if log_tail:
         lines.append("")
-        lines.append(f"Últimas líneas del log ({len(log_tail)}):")
-        lines.extend(log_tail)
+        lines.append(values["log"])
+    lines.append("")
+    lines.append("--")
+    lines.extend(signature.splitlines())
+    return "\n".join(lines)
 
-    masker = SecretMasker.from_config(config)
-    return ReportMessage(subject=masker.mask(subject), body=masker.mask("\n".join(lines)))
+
+def _default_body_html(
+    values: Mapping[str, str],
+    signature: str,
+    batch: BatchBackupResult,
+    pipeline: PipelineResult,
+    config: Config,
+    log_tail: Sequence[str],
+) -> str:
+    """Cuerpo HTML integrado: resumen, secciones en ``<pre>`` y firma (Item 079)."""
+    esc = html.escape
+    items = [
+        f"<li>Host: {esc(values['host'])}</li>",
+        f"<li>Fecha: {esc(values['fecha'])}</li>",
+    ]
+    if values["horario"] != "manual":
+        items.append(f"<li>Horario: {esc(values['horario'])}</li>")
+    if values["cliente"]:
+        items.append(
+            f"<li>Cliente: {esc(values['cliente'])} · Entorno: {esc(values['entorno'])}</li>"
+        )
+    lines = [
+        "<html><head><meta charset=\"utf-8\"></head><body>",
+        f"<h3>Estado global: {esc(values['estado'])}</h3>",
+        "<ul>",
+        *items,
+        "</ul>",
+    ]
+    if batch.error_message is not None:
+        lines.append(f"<pre>{esc(batch.error_message)}</pre>")
+    elif not batch.results:
+        lines.append("<pre>No hay bases configuradas: nada que respaldar.</pre>")
+    else:
+        sections = [values["bases"], values["servidores"], values["totales"]]
+        detail = "\n\n".join(section for section in sections if section)
+        lines.append(f"<pre>{esc(detail)}</pre>")
+    if log_tail:
+        lines.append(f"<pre>{esc(values['log'])}</pre>")
+    lines.append(f"<p>--</p><pre>{esc(signature)}</pre>")
+    lines.append("</body></html>")
+    return "\n".join(lines)

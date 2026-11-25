@@ -33,6 +33,7 @@ from apscheduler.triggers.cron import CronTrigger
 from odin.paths import normalize_path
 
 __all__ = [
+    "TEMPLATE_KEYS",
     "AuthMethod",
     "CompressionConfig",
     "Config",
@@ -40,6 +41,7 @@ __all__ = [
     "ConfigProblem",
     "DatabaseConfig",
     "DbEngine",
+    "EnvironmentConfig",
     "HostKeyPolicy",
     "LocalConfig",
     "LogLevel",
@@ -56,6 +58,30 @@ __all__ = [
 _ROOT = "config"
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _E = TypeVar("_E", bound=Enum)
+
+# Placeholders admitidos en las plantillas del correo (Item 079). Es la misma
+# whitelist que ``odin.notify.render_template`` consume: la validación de
+# configuración rechaza cualquier clave desconocida antes de que el render la
+# encuentre. En español, coherente con el resto del contrato.
+TEMPLATE_KEYS = frozenset(
+    {
+        "cliente",
+        "entorno",
+        "instancia",
+        "motor",
+        "estado",
+        "horario",
+        "zona_horaria",
+        "host",
+        "fecha",
+        "contacto",
+        "log",
+        "bases",
+        "servidores",
+        "totales",
+    }
+)
+_TEMPLATE_TOKEN_RE = re.compile(r"\{([^{}]*)\}")
 
 
 class LogLevel(Enum):
@@ -197,12 +223,37 @@ class SmtpConfig:
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class NotificationConfig:
-    """Destinatarios y servidor de correo (``from_`` mapea el JSON ``from``)."""
+    """Destinatarios, servidor de correo y plantillas del informe (Item 079).
+
+    ``from_`` mapea el JSON ``from``; ``to`` admite varios destinatarios
+    separados por coma. ``subject``/``body_text``/``body_html``/``signature``
+    son plantillas opcionales con placeholders ``{clave}`` (``TEMPLATE_KEYS``):
+    si faltan se usa el contenido integrado. ``contact`` alimenta ``{contacto}``
+    y la firma por defecto.
+    """
 
     to: str
     from_: str
     smtp: SmtpConfig
-    log_tail_lines: int = 50
+    log_tail_lines: int = 200
+    contact: str | None = None
+    subject: str | None = None
+    body_text: str | None = None
+    body_html: str | None = None
+    signature: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class EnvironmentConfig:
+    """Tupla que identifica la instalación en el correo (Item 079).
+
+    ``client`` es la entidad cliente dueña de las instancias y ``name`` el
+    entorno (p. ej. ``prod``, ``staging``, ``dev``). El bloque es opcional: sin
+    él, el correo no lleva prefijo de entorno.
+    """
+
+    client: str
+    name: str
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -263,13 +314,16 @@ class Config:
     local: LocalConfig
     scheduler: SchedulerConfig
     config_path: Path
+    environment: EnvironmentConfig | None = None
 
     def validate_semantics(self) -> list[ConfigProblem]:
         """Validaciones cruzadas sobre el modelo ya construido.
 
         Cubre unicidad de nombres, referencias de los jobs del scheduler,
-        coherencia entre ``auth.method`` y los campos de credenciales, y las
-        reglas por motor de ``databases[].type`` (``_db_problems``).
+        coherencia entre ``auth.method`` y los campos de credenciales, las
+        reglas por motor de ``databases[].type`` (``_db_problems``) y la
+        whitelist de placeholders de las plantillas de notificación (Item 079,
+        ``_template_problems``).
         """
         problems: list[ConfigProblem] = []
         problems.extend(
@@ -292,6 +346,23 @@ class Config:
             problems.extend(_db_problems(database, f"{_ROOT}.databases[{index}]"))
         for index, server in enumerate(self.servers):
             problems.extend(_auth_problems(server.auth, f"{_ROOT}.servers[{index}].auth"))
+        notification = self.notification
+        for field_name in ("subject", "body_text", "body_html", "signature"):
+            template = getattr(notification, field_name)
+            if template is None:
+                continue
+            field_path = f"{_ROOT}.notification.{field_name}"
+            problems.extend(_template_problems(template, field_path))
+            if self.environment is None and ("{cliente}" in template or "{entorno}" in template):
+                problems.append(
+                    ConfigProblem(
+                        field_path=field_path,
+                        message=(
+                            "referencia {cliente}/{entorno} pero la configuración "
+                            "no define el bloque 'environment'"
+                        ),
+                    )
+                )
         return problems
 
     def iter_secret_fields(self) -> Iterator[tuple[str, str]]:
@@ -373,6 +444,34 @@ def _auth_problems(auth: ServerAuth, path: str) -> list[ConfigProblem]:
                     message="solo aplica cuando auth.method es 'password'",
                 )
             )
+    return problems
+
+
+def _template_problems(template: str, path: str) -> list[ConfigProblem]:
+    """Valida los placeholders ``{clave}`` de una plantilla de correo (Item 079).
+
+    Cada token ``{...}`` debe ser una clave de ``TEMPLATE_KEYS``; las llaves
+    sueltas o con contenido desconocido son un problema de configuración (con
+    sugerencia del más parecido, igual que los campos desconocidos). Las llaves
+    quedan reservadas: no hay mecanismo de escape.
+    """
+    problems: list[ConfigProblem] = []
+    for match in _TEMPLATE_TOKEN_RE.finditer(template):
+        key = match.group(1)
+        if key not in TEMPLATE_KEYS:
+            message = f"placeholder desconocido '{{{key}}}'"
+            suggestion = difflib.get_close_matches(key, sorted(TEMPLATE_KEYS), n=1, cutoff=0.6)
+            if suggestion:
+                message += f"; ¿quiso decir '{{{suggestion[0]}}}'?"
+            problems.append(ConfigProblem(field_path=path, message=message))
+    residual = _TEMPLATE_TOKEN_RE.sub("", template)
+    if "{" in residual or "}" in residual:
+        problems.append(
+            ConfigProblem(
+                field_path=path,
+                message="llaves reservadas: '{' y '}' solo se permiten dentro de un placeholder",
+            )
+        )
     return problems
 
 
@@ -797,12 +896,49 @@ def _parse_smtp(v: _Validator, raw: dict[str, Any], path: str) -> SmtpConfig:
     )
 
 
-_NOTIFICATION_FIELDS = frozenset({"to", "from", "smtp", "log_tail_lines"})
+def _email_list_field(v: _Validator, raw: dict[str, Any], key: str, path: str) -> str:
+    """Lista de emails separados por coma (para ``notification.to``, Item 079).
+
+    Cada dirección debe cumplir el formato individual (sin nombres visibles);
+    se devuelve normalizada con ``", "`` como separador. El correo es uno por
+    corrida: no hay destinatarios por instancia.
+    """
+    field_path = f"{path}.{key}"
+    if key not in raw:
+        v.add(field_path, "campo requerido ausente")
+        return ""
+    value = raw[key]
+    if not isinstance(value, str):
+        v.add(field_path, f"debe ser una cadena de texto, se encontró {type(value).__name__}")
+        return ""
+    addresses = [address.strip() for address in value.split(",")]
+    if not any(addresses):
+        v.add(field_path, "no debe ser una cadena vacía")
+        return ""
+    for address in addresses:
+        if _EMAIL_RE.fullmatch(address) is None:
+            v.add(field_path, f"no tiene formato de email válido: '{address}'")
+    return ", ".join(addresses)
+
+
+_NOTIFICATION_FIELDS = frozenset(
+    {
+        "to",
+        "from",
+        "smtp",
+        "log_tail_lines",
+        "contact",
+        "subject",
+        "body_text",
+        "body_html",
+        "signature",
+    }
+)
 
 
 def _parse_notification(v: _Validator, raw: dict[str, Any], path: str) -> NotificationConfig:
     v.unknown_fields(raw, _NOTIFICATION_FIELDS, path)
-    to = _email_field(v, raw, "to", path)
+    to = _email_list_field(v, raw, "to", path)
     from_ = _email_field(v, raw, "from", path)
     smtp = SmtpConfig(host="", port=0, username="", password="")
     if "smtp" not in raw:
@@ -811,10 +947,27 @@ def _parse_notification(v: _Validator, raw: dict[str, Any], path: str) -> Notifi
         smtp_raw = v.mapping(raw["smtp"], f"{path}.smtp")
         if smtp_raw is not None:
             smtp = _parse_smtp(v, smtp_raw, f"{path}.smtp")
-    log_tail_lines = v.int_field(raw, "log_tail_lines", path, required=False, default=50, minimum=0)
+    log_tail_lines = v.int_field(
+        raw, "log_tail_lines", path, required=False, default=200, minimum=0
+    )
     if log_tail_lines is None:
         log_tail_lines = 0
-    return NotificationConfig(to=to, from_=from_, smtp=smtp, log_tail_lines=log_tail_lines)
+    contact = v.str_field(raw, "contact", path, required=False, nullable=True)
+    subject = v.str_field(raw, "subject", path, required=False, nullable=True)
+    body_text = v.str_field(raw, "body_text", path, required=False, nullable=True)
+    body_html = v.str_field(raw, "body_html", path, required=False, nullable=True)
+    signature = v.str_field(raw, "signature", path, required=False, nullable=True)
+    return NotificationConfig(
+        to=to,
+        from_=from_,
+        smtp=smtp,
+        log_tail_lines=log_tail_lines,
+        contact=contact,
+        subject=subject,
+        body_text=body_text,
+        body_html=body_html,
+        signature=signature,
+    )
 
 
 _COMPRESSION_FIELDS = frozenset({"level", "password"})
@@ -955,8 +1108,23 @@ def _parse_scheduler(v: _Validator, raw: dict[str, Any], path: str) -> Scheduler
     return SchedulerConfig(enabled=enabled, timezone=timezone, jobs=jobs)
 
 
+_ENVIRONMENT_FIELDS = frozenset({"client", "name"})
+
+
+def _parse_environment(v: _Validator, raw: dict[str, Any], path: str) -> EnvironmentConfig:
+    """Parseo del bloque opcional ``environment`` (Item 079).
+
+    ``client`` y ``name`` son requeridos cuando el bloque existe (strings
+    libres, sin enum: no se limita a qué entornos puede tener un despliegue).
+    """
+    v.unknown_fields(raw, _ENVIRONMENT_FIELDS, path)
+    client = v.str_field(raw, "client", path) or ""
+    name = v.str_field(raw, "name", path) or ""
+    return EnvironmentConfig(client=client, name=name)
+
+
 _TOP_FIELDS = frozenset(
-    {"databases", "compression", "servers", "notification", "local", "scheduler"}
+    {"databases", "compression", "servers", "notification", "local", "scheduler", "environment"}
 )
 
 
@@ -1049,6 +1217,12 @@ def load_config(path: Path | str) -> Config:
         if section is not None:
             scheduler = _parse_scheduler(v, section, f"{_ROOT}.scheduler")
 
+    environment: EnvironmentConfig | None = None
+    if "environment" in root_map:
+        section = v.mapping(root_map["environment"], f"{_ROOT}.environment")
+        if section is not None:
+            environment = _parse_environment(v, section, f"{_ROOT}.environment")
+
     if v.problems:
         raise ConfigError(v.problems)
 
@@ -1060,6 +1234,7 @@ def load_config(path: Path | str) -> Config:
         local=local,
         scheduler=scheduler,
         config_path=config_path,
+        environment=environment,
     )
     semantic_problems = config.validate_semantics()
     if semantic_problems:

@@ -54,7 +54,8 @@
       "ssl": false,
       "username": "odin-backups@example.com",
       "password": "***"
-    }
+    },
+    "contact": "ops@example.com"
   },
   "local": {
     "work_dir": "/var/backups/odin",
@@ -73,5 +74,9 @@
         "skip_if_running": true
       }
     ]
+  },
+  "environment": {
+    "client": "caktus",
+    "name": "prod"
   }
 }

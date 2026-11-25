@@ -824,9 +824,10 @@ class PipelineCycleRunner:
     Filtra ``config.databases`` por las bases del job efectivo (el que el
     Item 051 ya acotó según ``skip_if_running``), construye la configuración
     del ciclo con ``dataclasses.replace`` —la del servicio queda intacta— e
-    invoca ``run_pipeline`` con su propio correo por ciclo y su retención. El
-    resultado se traduce a ``CycleOutcome`` (estado global, bases ejecutadas,
-    duración, correo y resumen de fallos).
+    invoca ``run_pipeline`` con su propio correo por ciclo y su retención,
+    entregando el job como contexto del informe (Item 079: horario legible y
+    timezone en el correo). El resultado se traduce a ``CycleOutcome`` (estado
+    global, bases ejecutadas, duración, correo y resumen de fallos).
 
     ``run`` y las opciones del pipeline son inyectables: los tests usan un
     doble sin red/SMTP y la integración (Item 056) inyecta fases dobles. Un
@@ -843,7 +844,9 @@ class PipelineCycleRunner:
         requested = set(job.databases)
         selected = [database for database in config.databases if database.name in requested]
         started = time.monotonic()
-        result = self._run(replace(config, databases=selected), **self._options)
+        # El job viaja hasta ``run_pipeline`` para que el informe del ciclo
+        # muestre su horario legible y su timezone (Item 079).
+        result = self._run(replace(config, databases=selected), job=job, **self._options)
         outcome = _outcome_from_pipeline(job, result, time.monotonic() - started)
         if outcome.status is CycleStatus.SUCCESS:
             logger.info(

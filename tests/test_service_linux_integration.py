@@ -60,7 +60,7 @@ from odin.service.linux import (
     _quote_argument,
     render_unit,
 )
-from tests.smtp_catcher import SmtpCatcher, parse_message
+from tests.smtp_catcher import SmtpCatcher, parse_message, plain_body
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REFERENCE_UNIT = REPO_ROOT / "deploy" / "odin.service"
@@ -420,7 +420,7 @@ def _assert_demo_reports(catcher: SmtpCatcher) -> None:
         assert "smtp-secret" not in raw
         message = parse_message(raw)
         assert str(message["Subject"]).startswith("[ODIN] ÉXITO")
-        assert "erp_principal: OK" in message.get_content()
+        assert "erp_principal: OK" in plain_body(message)
 
 
 @pytest.mark.integration

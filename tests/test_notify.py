@@ -13,12 +13,13 @@ from typing import Any, ClassVar
 import pytest
 
 from odin.backup import BackupResult, BatchBackupResult
-from odin.config import Config, SmtpConfig, load_config
+from odin.config import Config, SchedulerJob, SmtpConfig, load_config
 from odin.notify import (
     DEFAULT_SMTP_TIMEOUT_SEC,
     EmailNotifier,
     ReportMessage,
     render_report,
+    render_template,
 )
 from odin.pipeline import PipelineResult
 from odin.transfer import BatchTransferResult, TransferResult
@@ -84,8 +85,15 @@ def smtp_mock(monkeypatch: pytest.MonkeyPatch) -> type[FakeSMTP]:
     return FakeSMTP
 
 
-def _config(tmp_path: Path, *, servers: bool = True, **smtp_overrides: Any) -> Config:
-    """Config Linux válida; permite apagar servidores y mutar ``notification.smtp``."""
+def _config(
+    tmp_path: Path,
+    *,
+    servers: bool = True,
+    environment: tuple[str, str] | None = None,
+    notification: Mapping[str, Any] | None = None,
+    **smtp_overrides: Any,
+) -> Config:
+    """Config Linux válida; permite apagar servidores, mutar ``notification`` y el entorno."""
     data: dict[str, Any] = json.loads(
         (FIXTURES / "config_valid_linux.json").read_text(encoding="utf-8")
     )
@@ -93,13 +101,17 @@ def _config(tmp_path: Path, *, servers: bool = True, **smtp_overrides: Any) -> C
     if not servers:
         data["servers"] = []
     data["notification"]["smtp"].update(smtp_overrides)
+    if environment is not None:
+        data["environment"] = {"client": environment[0], "name": environment[1]}
+    if notification:
+        data["notification"].update(notification)
     path = tmp_path / "config.json"
     path.write_text(json.dumps(data), encoding="utf-8")
     return load_config(str(path))
 
 
 def _report(subject: str = "asunto", body: str = "cuerpo") -> ReportMessage:
-    return ReportMessage(subject=subject, body=body)
+    return ReportMessage(subject=subject, body_text=body)
 
 
 # --- Transporte SMTP (Item 039) ---
@@ -168,9 +180,31 @@ def test_envelope_from_to_and_body(tmp_path: Path, smtp_mock: type[FakeSMTP]) ->
     assert message["From"] == "odin-backups@example.com"
     assert message["To"] == "control@example.com"
     assert message["Subject"] == "Asunto X"
-    assert message.get_content().strip() == "Cuerpo Y"
+    assert message["Content-Language"] == "es-419"
     assert message.get_content_type() == "text/plain"
     assert not message.is_multipart()
+    assert message.get_content().strip() == "Cuerpo Y"
+    assert message.get_content_charset() == "utf-8"
+
+
+def test_report_html_part_becomes_alternative(tmp_path: Path, smtp_mock: type[FakeSMTP]) -> None:
+    config = _config(tmp_path)
+
+    EmailNotifier.from_config(config).send(
+        ReportMessage(subject="Asunto X", body_text="plano", body_html="<p>html</p>")
+    )
+
+    (server,) = FakeSMTP.instances
+    message = server.message
+    assert message is not None
+    assert message.get_content_type() == "multipart/alternative"
+    parts = message.get_payload()
+    assert [part.get_content_type() for part in parts] == ["text/plain", "text/html"]
+    plain, html_part = parts
+    assert plain.get_content().strip() == "plano"
+    assert plain.get_content_charset() == "utf-8"
+    assert html_part.get_content().strip() == "<p>html</p>"
+    assert html_part.get_content_charset() == "utf-8"
 
 
 def test_timeout_passed_to_transport(tmp_path: Path, smtp_mock: type[FakeSMTP]) -> None:
@@ -320,6 +354,7 @@ def _render(
     *,
     error_message: str | None = None,
     log_tail: Sequence[str] = (),
+    job: SchedulerJob | None = None,
 ) -> ReportMessage:
     batch = BatchBackupResult(
         results=tuple(results),
@@ -336,7 +371,9 @@ def _render(
         for name, items in (transfers or {}).items()
     }
     pipeline = PipelineResult(backup=batch, transfers=batches)
-    return render_report(config, pipeline, log_tail=log_tail, now=NOW, hostname="srv-prueba")
+    return render_report(
+        config, pipeline, log_tail=log_tail, now=NOW, hostname="srv-prueba", job=job
+    )
 
 
 def test_render_success_state(tmp_path: Path) -> None:
@@ -353,18 +390,23 @@ def test_render_success_state(tmp_path: Path) -> None:
         },
     )
 
-    assert report.subject == "[ODIN] ÉXITO — respaldo de srv-prueba (2026-09-15 10:30:00)"
-    assert "Estado global: ÉXITO" in report.body
-    assert "- erp_principal: OK" in report.body
-    assert f"{Path('/work/erp_principal.fbk')} (100 bytes, 0.1 s)" in report.body
-    assert f"{Path('/work/erp_principal.fbk.7z')} (40 bytes, 0.2 s)" in report.body
-    assert "transferencia: 2/2 destino(s) OK" in report.body
+    assert report.subject == "[ODIN] ÉXITO — respaldo de erp_principal (2026-09-15 10:30:00)"
+    assert "Estado global: ÉXITO" in report.body_text
+    assert "- erp_principal: OK" in report.body_text
+    assert f"{Path('/work/erp_principal.fbk')} (100 bytes, 0.1 s)" in report.body_text
+    assert f"{Path('/work/erp_principal.fbk.7z')} (40 bytes, 0.2 s)" in report.body_text
+    assert "transferencia: 2/2 destino(s) OK" in report.body_text
     assert (
         "- erp_principal → sitio-alterno-1: OK /backups/firebird/erp_principal.fbk.7z "
-        "(40 bytes, 0.3 s)" in report.body
+        "(40 bytes, 0.3 s)" in report.body_text
     )
-    assert "Totales: 1/1 base(s) OK" in report.body
-    assert "destinos 2/2 OK" in report.body
+    assert "Totales: 1/1 base(s) OK" in report.body_text
+    assert "destinos 2/2 OK" in report.body_text
+    assert report.body_html is not None
+    assert "<h3>Estado global: ÉXITO</h3>" in report.body_html
+    assert "erp_principal: OK" in report.body_html
+    assert "--" in report.body_text
+    assert "ODIN" in report.body_text
 
 
 def test_render_partial_state(tmp_path: Path) -> None:
@@ -373,11 +415,11 @@ def test_render_partial_state(tmp_path: Path) -> None:
     report = _render(config, [_ok_backup("uno"), _failed_backup("dos")])
 
     assert report.subject.startswith("[ODIN] PARCIAL")
-    assert "Estado global: PARCIAL" in report.body
-    assert "- uno: OK" in report.body
-    assert "- dos: FALLO" in report.body
-    assert "error de respaldo: gbak falló (código 1): database is in use" in report.body
-    assert "Totales: 1/2 base(s) OK" in report.body
+    assert "Estado global: PARCIAL" in report.body_text
+    assert "- uno: OK" in report.body_text
+    assert "- dos: FALLO" in report.body_text
+    assert "error de respaldo: gbak falló (código 1): database is in use" in report.body_text
+    assert "Totales: 1/2 base(s) OK" in report.body_text
 
 
 def test_render_failure_state(tmp_path: Path) -> None:
@@ -386,9 +428,9 @@ def test_render_failure_state(tmp_path: Path) -> None:
     report = _render(config, [_failed_backup("uno"), _compression_failure("dos")])
 
     assert report.subject.startswith("[ODIN] FALLO")
-    assert "Estado global: FALLO" in report.body
-    assert "error de compresión: no se pudo comprimir: disco lleno" in report.body
-    assert "Totales: 0/2 base(s) OK" in report.body
+    assert "Estado global: FALLO" in report.body_text
+    assert "error de compresión: no se pudo comprimir: disco lleno" in report.body_text
+    assert "Totales: 0/2 base(s) OK" in report.body_text
 
 
 def test_render_batch_error_message(tmp_path: Path) -> None:
@@ -397,8 +439,8 @@ def test_render_batch_error_message(tmp_path: Path) -> None:
     report = _render(config, [], error_message="no se pudo preparar el directorio de trabajo")
 
     assert report.subject.startswith("[ODIN] FALLO")
-    assert "Respaldo no ejecutado: no se pudo preparar el directorio de trabajo" in report.body
-    assert "Bases:" not in report.body
+    assert "Respaldo no ejecutado: no se pudo preparar el directorio de trabajo" in report.body_text
+    assert "Bases:" not in report.body_text
 
 
 def test_render_empty_batch(tmp_path: Path) -> None:
@@ -407,7 +449,7 @@ def test_render_empty_batch(tmp_path: Path) -> None:
     report = _render(config, [])
 
     assert report.subject.startswith("[ODIN] FALLO")
-    assert "No hay bases configuradas" in report.body
+    assert "No hay bases configuradas" in report.body_text
 
 
 def test_render_without_servers(tmp_path: Path) -> None:
@@ -415,9 +457,9 @@ def test_render_without_servers(tmp_path: Path) -> None:
 
     report = _render(config, [_ok_backup("erp_principal")])
 
-    assert "transferencia: no aplica (sin servidores)" in report.body
-    assert "Servidores destino: ninguno configurado." in report.body
-    assert "destinos 0/0 OK" in report.body
+    assert "transferencia: no aplica (sin servidores)" in report.body_text
+    assert "Servidores destino: ninguno configurado." in report.body_text
+    assert "destinos 0/0 OK" in report.body_text
 
 
 def test_render_base_without_transfer(tmp_path: Path) -> None:
@@ -425,7 +467,7 @@ def test_render_base_without_transfer(tmp_path: Path) -> None:
 
     report = _render(config, [_failed_backup("erp_principal")])
 
-    assert "Servidores destino: sin transferencias en esta ejecución." in report.body
+    assert "Servidores destino: sin transferencias en esta ejecución." in report.body_text
 
 
 def test_render_transfer_failure_detail(tmp_path: Path) -> None:
@@ -446,9 +488,12 @@ def test_render_transfer_failure_detail(tmp_path: Path) -> None:
         },
     )
 
-    assert "error de transferencia: sitio-alterno-1: Connection error: refused" in report.body
-    assert "- erp_principal → sitio-alterno-1: FALLO (Connection error: refused)" in report.body
-    assert "destinos 0/1 OK" in report.body
+    assert "error de transferencia: sitio-alterno-1: Connection error: refused" in report.body_text
+    assert (
+        "- erp_principal → sitio-alterno-1: FALLO (Connection error: refused)"
+        in report.body_text
+    )
+    assert "destinos 0/1 OK" in report.body_text
 
 
 def test_render_includes_log_tail(tmp_path: Path) -> None:
@@ -458,8 +503,8 @@ def test_render_includes_log_tail(tmp_path: Path) -> None:
         config, [_ok_backup("erp_principal")], log_tail=["primera línea", "segunda línea"]
     )
 
-    assert "Últimas líneas del log (2):" in report.body
-    assert report.body.index("primera línea") < report.body.index("segunda línea")
+    assert "Últimas líneas del log (2):" in report.body_text
+    assert report.body_text.index("primera línea") < report.body_text.index("segunda línea")
 
 
 def test_render_omits_log_tail_header_when_empty(tmp_path: Path) -> None:
@@ -467,7 +512,7 @@ def test_render_omits_log_tail_header_when_empty(tmp_path: Path) -> None:
 
     report = _render(config, [_ok_backup("erp_principal")])
 
-    assert "Últimas líneas del log" not in report.body
+    assert "Últimas líneas del log" not in report.body_text
 
 
 def test_render_never_includes_secrets(tmp_path: Path) -> None:
@@ -488,7 +533,140 @@ def test_render_never_includes_secrets(tmp_path: Path) -> None:
         log_tail=[f"linea de log con {secrets[0]}"],
     )
 
-    text = f"{report.subject}\n{report.body}"
+    text = f"{report.subject}\n{report.body_text}\n{report.body_html}"
     for secret in secrets:
         assert secret not in text
     assert "***" in text
+
+
+# --- Plantillas y contexto del informe (Item 079) ---
+
+
+def test_render_default_subject_with_environment(tmp_path: Path) -> None:
+    config = _config(tmp_path, environment=("caktus", "prod"))
+
+    report = _render(config, [_ok_backup("erp_principal")])
+
+    assert report.subject == (
+        "[ODIN] [caktus-prod] ÉXITO — respaldo de erp_principal (2026-09-15 10:30:00)"
+    )
+    assert "Cliente: caktus · Entorno: prod" in report.body_text
+    assert "Cliente: caktus · Entorno: prod" in (report.body_html or "")
+
+
+def test_render_custom_subject_template(tmp_path: Path) -> None:
+    config = _config(
+        tmp_path,
+        environment=("caktus", "prod"),
+        notification={"subject": "ODIN {cliente}/{entorno}: {estado} de {motor}"},
+    )
+
+    report = _render(config, [_ok_backup("erp_principal")])
+
+    assert report.subject == "ODIN caktus/prod: ÉXITO de firebird"
+
+
+def test_render_custom_body_text_template(tmp_path: Path) -> None:
+    config = _config(
+        tmp_path,
+        notification={
+            "body_text": "Corrida {fecha} sobre {instancia} ({motor}).\n\n{totales}"
+        },
+    )
+
+    report = _render(config, [_ok_backup("erp_principal")])
+
+    assert "Corrida 2026-09-15 10:30:00 sobre erp_principal (firebird)." in report.body_text
+    assert "Totales: 1/1 base(s) OK" in report.body_text
+    assert "--" in report.body_text
+    assert "ODIN" in report.body_text  # firma aplicada después de la plantilla
+
+
+def test_render_custom_body_html_template_escapes_values(tmp_path: Path) -> None:
+    config = _config(
+        tmp_path,
+        notification={"body_html": "<p>{instancia} &amp; co</p>"},
+    )
+    report = _render(config, [_ok_backup("erp_principal")])
+    assert "<p>erp_principal &amp; co</p>" in (report.body_html or "")
+    assert "--" in (report.body_html or "")
+
+
+def test_render_signature_with_contact(tmp_path: Path) -> None:
+    config = _config(
+        tmp_path,
+        environment=("caktus", "prod"),
+        notification={"contact": "ops@caktus.example"},
+    )
+
+    report = _render(config, [_ok_backup("erp_principal")])
+
+    assert "ODIN · caktus-prod" in report.body_text
+    assert "Contacto: ops@caktus.example" in report.body_text
+    assert "ODIN · caktus-prod" in (report.body_html or "")
+
+
+def test_render_custom_signature_template(tmp_path: Path) -> None:
+    config = _config(
+        tmp_path,
+        environment=("caktus", "prod"),
+        notification={
+            "signature": "Backups de {cliente} — {contacto}",
+            "contact": "ops@caktus.example",
+        },
+    )
+
+    report = _render(config, [_ok_backup("erp_principal")])
+
+    assert "Backups de caktus — ops@caktus.example" in report.body_text
+
+
+def test_render_scheduled_job_shows_human_schedule(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    job = SchedulerJob(databases=["erp_principal"], schedule="0 3 * * *")
+
+    report = _render(config, [_ok_backup("erp_principal")], job=job)
+
+    assert (
+        "Horario: todos los días a las 03:00 (America/Argentina/Buenos_Aires)"
+        in report.body_text
+    )
+
+
+def test_render_manual_run_omits_schedule_line(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+
+    report = _render(config, [_ok_backup("erp_principal")])
+
+    assert "Horario:" not in report.body_text
+
+
+def test_render_truncates_many_instances_in_subject(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+
+    report = _render(
+        config, [_ok_backup(name) for name in ("uno", "dos", "tres", "cuatro", "cinco")]
+    )
+
+    assert "respaldo de uno, dos, tres +2" in report.subject
+
+
+def test_render_lists_engines_without_duplicates(tmp_path: Path) -> None:
+    config = _config(tmp_path, notification={"subject": "motores: {motor}"})
+
+    report = _render(config, [_ok_backup("erp_principal")])
+
+    assert report.subject == "motores: firebird"
+
+
+def test_render_template_replaces_whitelisted_placeholders() -> None:
+    assert render_template("Hola {cliente}", {"cliente": "caktus"}) == "Hola caktus"
+
+
+def test_render_template_values_with_braces_are_literal() -> None:
+    assert render_template("{log}", {"log": "línea {literal} rara"}) == "línea {literal} rara"
+
+
+def test_render_template_unknown_placeholder_raises() -> None:
+    with pytest.raises(ValueError):
+        render_template("hola {desconocido}", {"cliente": "caktus"})

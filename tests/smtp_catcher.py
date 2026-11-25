@@ -146,6 +146,21 @@ def parse_message(raw: str) -> email.message.Message:
     return email.message_from_string(raw, policy=policy.default)
 
 
+def plain_body(message: email.message.Message) -> str:
+    """Devuelve la parte ``text/plain`` del mensaje (multipart/alternative).
+
+    ``get_content()`` no soporta ``multipart/alternative`` con la policy
+    default: se baja a la parte plana con ``get_body`` (Item 079).
+    """
+    body = message.get_body(preferencelist=("plain",))
+    if body is None:
+        raise ValueError("el mensaje no tiene parte text/plain")
+    content = body.get_content()
+    if not isinstance(content, str):
+        raise ValueError("la parte text/plain no es texto")
+    return content
+
+
 def closed_port() -> int:
     """Reserva y libera un puerto loopback: la conexión será rechazada."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:

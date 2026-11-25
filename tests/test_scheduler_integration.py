@@ -41,7 +41,7 @@ from odin.scheduler import (
     state_path,
 )
 from odin.transfer import TransferResult
-from tests.smtp_catcher import SmtpCatcher, parse_message
+from tests.smtp_catcher import SmtpCatcher, parse_message, plain_body
 
 FIXTURES = Path(__file__).parent / "fixtures"
 LINUX_FIXTURE = FIXTURES / "config_valid_linux.json"
@@ -243,11 +243,14 @@ def test_scheduler_cycle_delivers_report_and_updates_state(tmp_path: Path) -> No
     raw = catcher.messages[0]
     message = parse_message(raw)
     assert str(message["Subject"]).startswith("[ODIN] ÉXITO")
-    body = message.get_content()
+    assert message.get_content_type() == "multipart/alternative"
+    assert message["Content-Language"] == "es-419"
+    body = plain_body(message)
     assert "Estado global: ÉXITO" in body
     assert "- erp_principal: OK" in body
     assert "sitio-alterno-1: OK" in body
     assert "Totales: 1/1 base(s) OK" in body
+    assert "Horario: todos los días a las 02:00 (America/Argentina/Buenos_Aires)" in body
 
     state = load_state(store.path).state
     assert state is not None
@@ -297,12 +300,12 @@ def test_scheduler_cycle_failure_sends_report_and_service_stays_operative(
     assert len(catcher.messages) == 2
     failure_message = parse_message(catcher.messages[0])
     assert str(failure_message["Subject"]).startswith("[ODIN] FALLO")
-    failure_body = failure_message.get_content()
+    failure_body = plain_body(failure_message)
     assert "Estado global: FALLO" in failure_body
     assert "gbak: error simulado" in failure_body
     success_message = parse_message(catcher.messages[1])
     assert str(success_message["Subject"]).startswith("[ODIN] ÉXITO")
-    assert "Estado global: ÉXITO" in success_message.get_content()
+    assert "Estado global: ÉXITO" in plain_body(success_message)
 
     state = load_state(store.path).state
     assert state is not None

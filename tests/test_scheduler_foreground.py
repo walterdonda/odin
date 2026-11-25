@@ -57,7 +57,7 @@ from odin.scheduler import (
     state_path,
 )
 from odin.transfer import TransferResult
-from tests.smtp_catcher import SmtpCatcher, parse_message
+from tests.smtp_catcher import SmtpCatcher, parse_message, plain_body
 
 FIXTURES = Path(__file__).parent / "fixtures"
 LINUX_FIXTURE = FIXTURES / "config_valid_linux.json"
@@ -288,7 +288,7 @@ def _assert_success_reports(catcher: SmtpCatcher) -> None:
         assert "smtp-secret" not in raw
         message = parse_message(raw)
         assert str(message["Subject"]).startswith("[ODIN] ÉXITO")
-        body = message.get_content()
+        body = plain_body(message)
         assert "Estado global: ÉXITO" in body
         assert "- erp_principal: OK" in body
         assert "sitio-alterno-1: OK" in body

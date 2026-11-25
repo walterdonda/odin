@@ -46,7 +46,7 @@ from pathlib import Path
 
 from odin.backup import BackupExecutor, BackupResult, BatchBackupResult
 from odin.compress import BatchCompressionResult, CompressionExecutor
-from odin.config import Config
+from odin.config import Config, SchedulerJob
 from odin.log import SecretMasker, capture_log_tail, logger
 from odin.notify import EmailNotifier, NotificationResult, ReportMessage, render_report
 from odin.retention import RetentionError, RetentionExecutor, RetentionResult
@@ -187,6 +187,7 @@ def run_pipeline(
     transfer: TransferExecutor | None = None,
     notifier: EmailNotifier | None = None,
     retention: RetentionExecutor | None = None,
+    job: SchedulerJob | None = None,
 ) -> PipelineResult:
     """Ejecuta el pipeline completo de ``odin run`` y devuelve el resultado.
 
@@ -198,6 +199,11 @@ def run_pipeline(
     retención default es ``RetentionExecutor()`` (Item 046). Cada fase aísla
     sus fallos; el éxito global exige que todas las fases culminen bien para
     cada base.
+
+    ``job`` es el ``SchedulerJob`` que disparó el ciclo (Item 079): el
+    ``PipelineCycleRunner`` lo entrega para que el informe muestre el horario
+    legible y la timezone del job; ``None`` en corridas manuales (``odin run``,
+    horario "manual").
 
     Las tres fases corren con un ``TailBufferHandler`` adjunto (Item 041) que
     captura las últimas ``notification.log_tail_lines`` líneas —ya
@@ -259,7 +265,7 @@ def run_pipeline(
         log_tail = tail.lines
 
     pipeline_result = PipelineResult(backup=final_batch, transfers=transfers)
-    report = render_report(config, pipeline_result, log_tail=log_tail)
+    report = render_report(config, pipeline_result, log_tail=log_tail, job=job)
     notification = _send_report(notifier, report, config.notification.to)
     retention_result = _run_retention(
         retention_executor, config.local.work_dir, config.local.retention_days

@@ -39,7 +39,7 @@ import pytest
 from odin.cli import EXIT_OK, main
 from odin.config import load_config
 from odin.scheduler import load_state, state_path
-from tests.smtp_catcher import SmtpCatcher, parse_message
+from tests.smtp_catcher import SmtpCatcher, parse_message, plain_body
 
 pytestmark = [
     pytest.mark.integration,
@@ -325,4 +325,4 @@ def _assert_smoke_reports(catcher: SmtpCatcher) -> None:
         assert "smtp-secret" not in raw
         message = parse_message(raw)
         assert str(message["Subject"]).startswith("[ODIN] ÉXITO")
-        assert "erp_principal: OK" in message.get_content()
+        assert "erp_principal: OK" in plain_body(message)

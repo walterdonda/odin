@@ -36,7 +36,7 @@ from tests.firebird_container import (
     FirebirdContainerError,
     modern_image,
 )
-from tests.smtp_catcher import SmtpCatcher, closed_port, parse_message
+from tests.smtp_catcher import SmtpCatcher, closed_port, parse_message, plain_body
 
 FIXTURES = Path(__file__).parent / "fixtures"
 LINUX_FIXTURE = FIXTURES / "config_valid_linux.json"
@@ -192,7 +192,7 @@ def test_run_delivers_report_through_real_smtp_without_secrets(
     assert message["To"] == "control@example.com"
     assert message["From"] == "odin-backups@example.com"
     assert str(message["Subject"]).startswith("[ODIN] ÉXITO")
-    body = message.get_content()
+    body = plain_body(message)
     assert "Estado global: ÉXITO" in body
     assert "- erp_principal: OK" in body
     assert "sitio-alterno-1: OK" in body
@@ -268,7 +268,7 @@ def test_run_end_to_end_with_firebird_and_local_catcher(
     assert catcher.errors == []
     assert catcher.recipients == ["control@example.com"]
     assert len(catcher.messages) == 1
-    body = parse_message(catcher.messages[0]).get_content()
+    body = plain_body(parse_message(catcher.messages[0]))
     assert "Estado global: ÉXITO" in body
     assert "- erp_principal: OK" in body
     assert "Servidores destino: ninguno configurado." in body

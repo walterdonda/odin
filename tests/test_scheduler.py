@@ -670,7 +670,7 @@ def test_pipeline_runner_uses_only_job_databases(tmp_path: Path) -> None:
         "erp_secundaria",
     ]
     assert cycle_config is not config
-    assert pipeline.options == [{"backup": "doble-respaldo"}]
+    assert pipeline.options == [{"backup": "doble-respaldo", "job": config.scheduler.jobs[0]}]
     assert outcome.status is CycleStatus.SUCCESS
     assert outcome.success is True
     assert outcome.databases == ("erp_principal",)

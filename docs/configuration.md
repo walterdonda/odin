@@ -138,7 +138,8 @@ admite):
   "servers":      [ ... ],   // requerido, puede ser []
   "notification": { ... },   // requerido
   "local":        { ... },   // requerido
-  "scheduler":    { ... }    // opcional
+  "scheduler":    { ... },   // opcional
+  "environment":  { ... }    // opcional (tupla cliente + entorno del correo)
 }
 ```
 
@@ -147,9 +148,10 @@ admite):
 | `databases` | Sí | Bases a respaldar: Firebird o PostgreSQL, según el `type` de cada entrada. |
 | `compression` | No | Nivel de 7z y cifrado opcional. |
 | `servers` | Sí | Destinos SFTP; puede estar vacío. |
-| `notification` | Sí | Casillas y transporte SMTP del informe. |
+| `notification` | Sí | Casillas, transporte SMTP y plantillas del informe. |
 | `local` | Sí | Directorios, retención y defaults operativos. |
 | `scheduler` | No | Horarios y subconjuntos de bases para el modo servicio. |
+| `environment` | No | Tupla `client` + `name` que identifica la instalación en el correo. |
 
 ---
 
@@ -383,10 +385,15 @@ están en [`docs/security.md`](security.md#4-políticas-de-host-key).
 
 | Campo | Tipo | Obligatorio | Default | Reglas y efecto |
 |---|---|---|---|---|
-| `to` | `string` | Sí | — | Casilla de control que recibe el informe. Un solo email con formato `usuario@dominio.tld`; el parser rechaza listas y nombres visibles. |
+| `to` | `string` | Sí | — | Casilla(s) de control que recibe(n) el informe. Uno o varios emails separados por coma; cada uno con formato `usuario@dominio.tld` (el parser rechaza nombres visibles). El correo es uno por corrida: no hay destinatarios por instancia. |
 | `from` | `string` | Sí | — | Remitente del informe. Un solo email con el mismo formato. |
 | `smtp` | `object` | Sí | — | Transporte SMTP; ver tabla siguiente. |
-| `log_tail_lines` | `integer` | No | `50` | Entero `>= 0`. Cantidad de últimas líneas del log que se anexan al cuerpo; `0` desactiva la cola. Las líneas ya van enmascaradas. |
+| `log_tail_lines` | `integer` | No | `200` | Entero `>= 0`. Cantidad de últimas líneas del log que se anexan al cuerpo; `0` desactiva la cola. Las líneas ya van enmascaradas. |
+| `contact` | `string \| null` | No | `null` | Contacto de operación; alimenta el placeholder `{contacto}` y la línea de contacto de la firma por defecto. |
+| `subject` | `string \| null` | No | `null` | Plantilla del asunto con placeholders `{clave}` (ver §6.4). `null` usa el asunto integrado. |
+| `body_text` | `string \| null` | No | `null` | Plantilla del cuerpo en texto plano. `null` usa el cuerpo integrado. |
+| `body_html` | `string \| null` | No | `null` | Plantilla del cuerpo HTML (multipart). `null` usa el cuerpo integrado. |
+| `signature` | `string \| null` | No | `null` | Plantilla de la firma. `null` usa la firma integrada. Se aplica siempre, en ambas partes. |
 
 ### 6.1 `notification.smtp`
 
@@ -414,7 +421,15 @@ están en [`docs/security.md`](security.md#4-políticas-de-host-key).
   del scheduler), con éxito, fallo parcial o fallo total. Un SMTP caído no
   aborta el respaldo: deja el informe como no enviado y degrada el exit code
   cuando corresponde.
-- El cuerpo es texto plano; no se adjuntan los respaldos.
+- El mensaje es **multipart**: `text/plain` + `text/html` en UTF-8 explícito,
+  con cabecera `Content-Language: es-419` (español latinoamericano). No se
+  adjuntan los respaldos.
+- La firma se aplica **siempre**, en ambas partes, después del cuerpo (sea el
+  integrado o la plantilla): separador `--` + firma. La firma integrada es
+  `ODIN · {cliente}-{entorno}` (o `ODIN` sin bloque `environment`) más la línea
+  `Contacto: {contact}` cuando `contact` existe.
+- El asunto y los cuerpos pasan por el enmascarador de secretos **después** de
+  renderizar las plantillas (segunda barrera).
 - `username` no vacío dispara `AUTH` con `password`. El parser exige ambos
   campos no vacíos; el modelo y el notificador admiten `""` para relays sin
   autenticación, pero esa configuración todavía no es aceptada.
@@ -422,9 +437,65 @@ están en [`docs/security.md`](security.md#4-políticas-de-host-key).
 - El timeout de red del envío SMTP es fijo (30 s) y no se configura en el
   JSON.
 
+### 6.4 Plantillas y placeholders
+
+`subject`, `body_text`, `body_html` y `signature` son plantillas con
+placeholders `{clave}`. La whitelist es estricta: una clave desconocida (o una
+llave suelta) es un **error de configuración** al cargar, con sugerencia del
+placeholder más parecido. Las llaves quedan reservadas: no hay mecanismo de
+escape.
+
+| Placeholder | Valor |
+|---|---|
+| `{cliente}` | `environment.client` (vacío sin bloque `environment`). |
+| `{entorno}` | `environment.name` (vacío sin bloque `environment`). |
+| `{instancia}` | Nombres de las bases de la corrida unidos por coma, truncando a 3 con ` +N`. |
+| `{motor}` | Motores presentes en la corrida, sin duplicados (`firebird`, `postgresql`). |
+| `{estado}` | `ÉXITO`, `PARCIAL` o `FALLO`. |
+| `{horario}` | Horario **legible en español** con su timezone (p. ej. `todos los días a las 03:00 (America/Caracas)`); patrones exóticos caen al cron crudo. En corridas manuales: `manual`. |
+| `{zona_horaria}` | Timezone IANA del scheduler (vacío en corridas manuales). |
+| `{host}` | Hostname del equipo donde corre ODIN. |
+| `{fecha}` | Marca de tiempo de la corrida (`YYYY-MM-DD HH:MM:SS`). |
+| `{contacto}` | `notification.contact` (vacío si falta). |
+| `{log}` | Cola del log capturada (sección "Últimas líneas del log (N)"), ya enmascarada. |
+| `{bases}` | Detalle por base (estado, rutas, tamaños, duraciones y errores de fase). |
+| `{servidores}` | Detalle por servidor destino. |
+| `{totales}` | Línea de totales (bases, duraciones y destinos). |
+
+Restricciones cruzadas: si una plantilla referencia `{cliente}` o `{entorno}`
+y la configuración no define el bloque `environment`, la carga falla con el
+campo de la plantilla implicado.
+
+Asunto integrado (cuando `subject` falta):
+
+- con `environment`: `[ODIN] [{cliente}-{entorno}] {estado} — respaldo de {instancia} ({fecha})`
+- sin `environment`: `[ODIN] {estado} — respaldo de {instancia} ({fecha})`
+
+En `body_html` los valores se escapan para HTML antes de sustituir (las
+plantillas propias pueden usar markup); el HTML integrado lleva el resumen en
+una tabla/lista, las secciones y el log en `<pre>` y la firma al final.
+
+### 6.5 Bloque raíz `environment`
+
+Identifica la instalación en el correo como tupla **entidad cliente +
+entorno**. Es opcional: sin él, el correo no lleva prefijo de entorno y
+`{cliente}`/`{entorno}` quedan vacíos (y no pueden usarse en plantillas).
+
+| Campo | Tipo | Obligatorio | Default | Reglas y efecto |
+|---|---|---|---|---|
+| `client` | `string` | Sí (si el bloque existe) | — | No vacío. Entidad cliente dueña de las instancias. |
+| `name` | `string` | Sí (si el bloque existe) | — | No vacío. Entorno: p. ej. `prod`, `staging`, `dev`. String libre, sin enum. |
+
 ```json
 {
-  "to": "control@example.com",
+  "client": "caktus",
+  "name": "prod"
+}
+```
+
+```json
+{
+  "to": "control@example.com, ops@example.com",
   "from": "odin-backups@example.com",
   "smtp": {
     "host": "smtp.example.com",
@@ -434,7 +505,9 @@ están en [`docs/security.md`](security.md#4-políticas-de-host-key).
     "username": "odin-backups@example.com",
     "password": "***"
   },
-  "log_tail_lines": 50
+  "log_tail_lines": 200,
+  "contact": "ops@example.com",
+  "subject": "[ODIN {cliente}-{entorno}] {estado} — {instancia} ({fecha})"
 }
 ```
 
@@ -753,7 +826,8 @@ idéntico.
       "username": "odin-backups@example.com",
       "password": "***"
     },
-    "log_tail_lines": 50
+    "log_tail_lines": 200,
+    "contact": "ops@example.com"
   },
   "local": {
     "work_dir": "/var/backups/odin",
@@ -777,6 +851,10 @@ idéntico.
         "skip_if_running": true
       }
     ]
+  },
+  "environment": {
+    "client": "caktus",
+    "name": "prod"
   }
 }
 ```
